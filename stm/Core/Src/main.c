@@ -18,6 +18,7 @@
 /* USER CODE END Header */
 /* Includes ------------------------------------------------------------------*/
 #include "main.h"
+#include "cmsis_os.h"
 
 /* Private includes ----------------------------------------------------------*/
 /* USER CODE BEGIN Includes */
@@ -37,141 +38,133 @@
 
 /* Private macro -------------------------------------------------------------*/
 /* USER CODE BEGIN PM */
-#define V1_OFFSET		0//3050 //
-#define V1_SENSOR_MULT	1//0.996551//Encontra a tensão da Saída do Sensor x100
-#define V1_REAL_MULT 	1//63.37024//Encontra a tensão de entrada do Sensor  x100
-//(EX - SENSOR_MULT) - 2,25v = 225 (REAL_MULT) 183,08v = 18308
-#define C2_OFFSET 		0//1910 //1,66
-#define C2_SENSOR_MULT	1//0.362903  //Encontra a tensão da Saída do Sensor x100
-#define C2_REAL_MULT	1//5.4691//Encontra a Corrente de entrada do Sensor  x100
-//(EX - SENSOR_MULT) - 2,25v = 225 (REAL_MULT) 12,25a = 1225
+#define V1_SENSOR_MULT	0.000837696335//0.996551//Encontra a tensão da Saída do Sensor x100
+#define V1_REAL_MULT 	789.1033381//808.1496160//63.37024//Encontra a tensão de entrada do Sensor  x100
 
-#define F_BUFFER_SIZE	512
-#define H_BUFFER_SIZE	256
+#define C2_SENSOR_MULT	0.000878232758//0.362903//Encontra a tensão da Saída do Sensor x100
+#define C2_REAL_MULT	23.10292756//5.4691//Encontra a Corrente de entrada do Sensor  x100
+
+#define F_BUFFER_SIZE	256
+#define H_BUFFER_SIZE	128
+
+//UART
+#define ESC 0x10
+#define ESC_INC 0x20
+#define DEVICE_ADDR  0x01
+
+#define RESPONSE_OPCODE_MASK 0x80
+
+#define MAX_PACKAGE_LEN 150
 
 /* USER CODE END PM */
 
 /* Private variables ---------------------------------------------------------*/
 ADC_HandleTypeDef hadc1;
+ADC_HandleTypeDef hadc2;
 DMA_HandleTypeDef hdma_adc1;
 
-DAC_HandleTypeDef hdac1;
-DMA_HandleTypeDef hdma_dac_ch1;
-
 TIM_HandleTypeDef htim1;
-TIM_HandleTypeDef htim2;
 
 UART_HandleTypeDef huart4;
 
+/* Definitions for uartTask */
+osThreadId_t uartTaskHandle;
+const osThreadAttr_t uartTask_attributes = {
+  .name = "uartTask",
+  .stack_size = 256 * 4,
+  .priority = (osPriority_t) osPriorityNormal,
+};
+/* Definitions for adcTask */
+osThreadId_t adcTaskHandle;
+const osThreadAttr_t adcTask_attributes = {
+  .name = "adcTask",
+  .stack_size = 256 * 4,
+  .priority = (osPriority_t) osPriorityAboveNormal,
+};
+/* Definitions for adchalfselectQueue */
+osMessageQueueId_t adchalfselectQueueHandle;
+const osMessageQueueAttr_t adchalfselectQueue_attributes = {
+  .name = "adchalfselectQueue"
+};
+/* Definitions for uartqueue */
+osMessageQueueId_t uartqueueHandle;
+const osMessageQueueAttr_t uartqueue_attributes = {
+  .name = "uartqueue"
+};
+/* Definitions for uartBinSema */
+osSemaphoreId_t uartBinSemaHandle;
+const osSemaphoreAttr_t uartBinSema_attributes = {
+  .name = "uartBinSema"
+};
 /* USER CODE BEGIN PV */
 
+uint32_t 	adcBuffer[F_BUFFER_SIZE];
+float 		adc1_voltage[H_BUFFER_SIZE];
+float 		adc2_current[H_BUFFER_SIZE];
 
-uint32_t adcs[F_BUFFER_SIZE];
-int16_t adc1v[H_BUFFER_SIZE], adc2c[H_BUFFER_SIZE];
-//float adc1v[BUFFER_SIZE], adc2c[BUFFER_SIZE];
-
-uint16_t 	adcBuffer[256];
-float 		ReIm[256];
-
-
-float cc_value = 0.0;
-float rms = 0.0;
+float cc_voltage = 0.0;
+float rms_voltage = 0.0;
+float cc_current = 0.0;
+float rms_current = 0.0;
+float pot_aparente = 0.0;
+float pot_reativa = 0.0;
+float pot_ativa = 0.0;
+float pf = 0.0;
 
 
-uint16_t sin_wave[256] = {2048, 2098, 2148, 2199, 2249, 2299, 2349, 2399, 2448, 2498, 2547, 2596, 2644, 2692, 2740,
-		2787, 2834, 2880, 2926, 2971, 3016, 3060, 3104, 3147, 3189, 3230, 3271, 3311, 3351, 3389,
-		3427, 3464, 3500, 3535, 3569, 3602, 3635, 3666, 3697, 3726, 3754, 3782, 3808, 3833, 3857,
-		3880, 3902, 3923, 3943, 3961, 3979, 3995, 4010, 4024, 4036, 4048, 4058, 4067, 4074, 4081,
-		4086, 4090, 4093, 4095, 4095, 4094, 4092, 4088, 4084, 4078, 4071, 4062, 4053, 4042, 4030,
-		4017, 4002, 3987, 3970, 3952, 3933, 3913, 3891, 3869, 3845, 3821, 3795, 3768, 3740, 3711,
-		3681, 3651, 3619, 3586, 3552, 3517, 3482, 3445, 3408, 3370, 3331, 3291, 3251, 3210, 3168,
-		3125, 3082, 3038, 2994, 2949, 2903, 2857, 2811, 2764, 2716, 2668, 2620, 2571, 2522, 2473,
-		2424, 2374, 2324, 2274, 2224, 2174, 2123, 2073, 2022, 1972, 1921, 1871, 1821, 1771, 1721,
-		1671, 1622, 1573, 1524, 1475, 1427, 1379, 1331, 1284, 1238, 1192, 1146, 1101, 1057, 1013,
-		970, 927, 885, 844, 804, 764, 725, 687, 650, 613, 578, 543, 509, 476, 444,
-		414, 384, 355, 327, 300, 274, 250, 226, 204, 182, 162, 143, 125, 108, 93,
-		78, 65, 53, 42, 33, 24, 17, 11, 7, 3, 1, 0, 0, 2, 5,
-		9, 14, 21, 28, 37, 47, 59, 71, 85, 100, 116, 134, 152, 172, 193,
-		215, 238, 262, 287, 313, 341, 369, 398, 429, 460, 493, 526, 560, 595, 631,
-		668, 706, 744, 784, 824, 865, 906, 948, 991, 1035, 1079, 1124, 1169, 1215, 1261,
-		1308, 1355, 1403, 1451, 1499, 1548, 1597, 1647, 1696, 1746, 1796, 1846, 1896, 1947, 1997,
-		2047};
+uint8_t rx_buffer[256];
+uint8_t tx_buffer[256];
+uint16_t rx_index = 0;
 
+
+enum UART_PACKAGE_PARTS
+{
+  UPP_STX,
+  UPP_DEVICE_ADDRESS,
+  UPP_OPCODE,
+  UPP_DATA_LEN,
+  UPP_DATA,
+  UPP_CHECKSUM,
+  UPP_ETX
+};
+
+struct UART_PACKAGE_PROTOCOL
+{
+  unsigned char uc_Stx;
+  unsigned char uc_DeviceAddress;
+  unsigned char uc_OpCode;
+  unsigned char uc_Datalen;
+  unsigned char uc_Data[MAX_PACKAGE_LEN];
+  unsigned char uc_Checksum;
+  unsigned char uc_Etx;
+};
+
+UART_PACKAGE_PARTS  m_udtUartPackageParts;
+UART_PACKAGE_PROTOCOL m_udtReceptionPackage;
+UART_PACKAGE_PROTOCOL m_udtTransmitionPackage;
 
 /* USER CODE END PV */
 
 /* Private function prototypes -----------------------------------------------*/
 void SystemClock_Config(void);
+void PeriphCommonClock_Config(void);
 static void MX_GPIO_Init(void);
 static void MX_DMA_Init(void);
 static void MX_ADC1_Init(void);
 static void MX_UART4_Init(void);
 static void MX_TIM1_Init(void);
-static void MX_DAC1_Init(void);
-static void MX_TIM2_Init(void);
+static void MX_ADC2_Init(void);
+void StartUartTask(void *argument);
+void StartAdcTask(void *argument);
+
 /* USER CODE BEGIN PFP */
 
-/*
- * void SplitData(void);
- *
- * Recebe buffer separa os dados
- *
- *@author Vinicius Ludwig
- */
-void SplitData(uint32_t *DTSplit);
+
 
 /* USER CODE END PFP */
 
 /* Private user code ---------------------------------------------------------*/
 /* USER CODE BEGIN 0 */
-
-void HAL_ADC_ConvHalfCpltCallback(ADC_HandleTypeDef *hadc){
-
-}
-void HAL_ADC_ConvCpltCallback(ADC_HandleTypeDef *hadc){
-
-	  int k = 0;
-
-	  for(int i = 0; i < 256; i++){
-		  ReIm[k] = (float)adcBuffer[i] * 0.0008056640625;
-		  cc_value += ReIm[k];
-		  //ReIm[k+1] = 0.0;
-		  //k += 2;
-		  k ++;
-	  }
-	  cc_value /= 256;
-	  for(int i = 0; i < 256; i++){
-		  rms += (ReIm[k] - cc_value) * (ReIm[k] - cc_value);
-	  }
-	  rms = sqrtf(rms/256);
-	//SplitData(&adcs[H_BUFFER_SIZE]);
-	//HAL_TIM_Base_Stop(&htim1);
-
-}
-
-/*
- * void SplitData(void);
- *
- * Recebe buffer separa os dados
- *
- *@author Vinicius Ludwig
- */
-void SplitData(uint32_t *DTSplit)
-{
-	for(uint16_t i = 0; i < H_BUFFER_SIZE; i++){
-		// Extrai os 16 bits menos significativos
-		uint16_t adc1_raw = (uint16_t)(DTSplit[i] & 0x0000FFFF);
-
-		// Realiza os cálculos com um tipo maior para evitar truncamento
-		adc1v[i] = ((int32_t)adc1_raw - V1_OFFSET) * V1_SENSOR_MULT * V1_REAL_MULT;
-
-		// Extrai os 16 bits mais significativos
-		uint16_t adc2_raw = (uint16_t)((DTSplit[i] >> 16) & 0x0000FFFF);
-
-		// Realiza os cálculos
-		adc2c[i] = ((int32_t)adc2_raw - C2_OFFSET) * C2_SENSOR_MULT * C2_REAL_MULT;
-	}
-}
 
 /* USER CODE END 0 */
 
@@ -197,6 +190,9 @@ int main(void)
   /* Configure the system clock */
   SystemClock_Config();
 
+/* Configure the peripherals common clocks */
+  PeriphCommonClock_Config();
+
   /* USER CODE BEGIN SysInit */
 
   /* USER CODE END SysInit */
@@ -207,24 +203,62 @@ int main(void)
   MX_ADC1_Init();
   MX_UART4_Init();
   MX_TIM1_Init();
-  MX_DAC1_Init();
-  MX_TIM2_Init();
+  MX_ADC2_Init();
   /* USER CODE BEGIN 2 */
-  //HAL_ADC_Start(&hadc2);
-  //HAL_ADCEx_MultiModeStart_DMA(&hadc1, (uint32_t*)adcs, F_BUFFER_SIZE);
-  //HAL_TIM_Base_Start(&htim1);
-  //HAL_ADC_Start_DMA(&hadc1, (uint32_t*)adcs, F_BUFFER_SIZE);
-
-  HAL_TIM_Base_Start(&htim2);
-  HAL_TIM_Base_Start(&htim1);
-
-  HAL_DAC_Start_DMA(&hdac1, DAC_CHANNEL_1, (uint32_t*)sin_wave, 256, DAC_ALIGN_12B_R);
-  HAL_ADC_Start_DMA(&hadc1, (uint32_t *)adcBuffer, 256);
 
 
 
   /* USER CODE END 2 */
 
+  /* Init scheduler */
+  osKernelInitialize();
+
+  /* USER CODE BEGIN RTOS_MUTEX */
+  /* add mutexes, ... */
+  /* USER CODE END RTOS_MUTEX */
+
+  /* Create the semaphores(s) */
+  /* creation of uartBinSema */
+  uartBinSemaHandle = osSemaphoreNew(1, 1, &uartBinSema_attributes);
+
+  /* USER CODE BEGIN RTOS_SEMAPHORES */
+  /* add semaphores, ... */
+  /* USER CODE END RTOS_SEMAPHORES */
+
+  /* USER CODE BEGIN RTOS_TIMERS */
+  /* start timers, add new ones, ... */
+  /* USER CODE END RTOS_TIMERS */
+
+  /* Create the queue(s) */
+  /* creation of adchalfselectQueue */
+  adchalfselectQueueHandle = osMessageQueueNew (1, sizeof(uint8_t), &adchalfselectQueue_attributes);
+
+  /* creation of uartqueue */
+  uartqueueHandle = osMessageQueueNew (128, sizeof(uint8_t), &uartqueue_attributes);
+
+  /* USER CODE BEGIN RTOS_QUEUES */
+  /* add queues, ... */
+  /* USER CODE END RTOS_QUEUES */
+
+  /* Create the thread(s) */
+  /* creation of uartTask */
+  uartTaskHandle = osThreadNew(StartUartTask, NULL, &uartTask_attributes);
+
+  /* creation of adcTask */
+  adcTaskHandle = osThreadNew(StartAdcTask, NULL, &adcTask_attributes);
+
+  /* USER CODE BEGIN RTOS_THREADS */
+  /* add threads, ... */
+  /* USER CODE END RTOS_THREADS */
+
+  /* USER CODE BEGIN RTOS_EVENTS */
+  /* add events, ... */
+  /* USER CODE END RTOS_EVENTS */
+
+  /* Start scheduler */
+  osKernelStart();
+
+  /* We should never get here as control is now taken by the scheduler */
   /* Infinite loop */
   /* USER CODE BEGIN WHILE */
   while (1)
@@ -287,6 +321,31 @@ void SystemClock_Config(void)
 }
 
 /**
+  * @brief Peripherals Common Clock Configuration
+  * @retval None
+  */
+void PeriphCommonClock_Config(void)
+{
+  RCC_PeriphCLKInitTypeDef PeriphClkInit = {0};
+
+  /** Initializes the peripherals clock
+  */
+  PeriphClkInit.PeriphClockSelection = RCC_PERIPHCLK_ADC;
+  PeriphClkInit.AdcClockSelection = RCC_ADCCLKSOURCE_PLLSAI1;
+  PeriphClkInit.PLLSAI1.PLLSAI1Source = RCC_PLLSOURCE_HSI;
+  PeriphClkInit.PLLSAI1.PLLSAI1M = 1;
+  PeriphClkInit.PLLSAI1.PLLSAI1N = 8;
+  PeriphClkInit.PLLSAI1.PLLSAI1P = RCC_PLLP_DIV7;
+  PeriphClkInit.PLLSAI1.PLLSAI1Q = RCC_PLLQ_DIV2;
+  PeriphClkInit.PLLSAI1.PLLSAI1R = RCC_PLLR_DIV2;
+  PeriphClkInit.PLLSAI1.PLLSAI1ClockOut = RCC_PLLSAI1_ADC1CLK;
+  if (HAL_RCCEx_PeriphCLKConfig(&PeriphClkInit) != HAL_OK)
+  {
+    Error_Handler();
+  }
+}
+
+/**
   * @brief ADC1 Initialization Function
   * @param None
   * @retval None
@@ -314,7 +373,7 @@ static void MX_ADC1_Init(void)
   hadc1.Init.ScanConvMode = ADC_SCAN_DISABLE;
   hadc1.Init.EOCSelection = ADC_EOC_SINGLE_CONV;
   hadc1.Init.LowPowerAutoWait = DISABLE;
-  hadc1.Init.ContinuousConvMode = ENABLE;
+  hadc1.Init.ContinuousConvMode = DISABLE;
   hadc1.Init.NbrOfConversion = 1;
   hadc1.Init.DiscontinuousConvMode = DISABLE;
   hadc1.Init.ExternalTrigConv = ADC_EXTERNALTRIG_T1_TRGO;
@@ -329,7 +388,9 @@ static void MX_ADC1_Init(void)
 
   /** Configure the ADC multi-mode
   */
-  multimode.Mode = ADC_MODE_INDEPENDENT;
+  multimode.Mode = ADC_DUALMODE_REGSIMULT;
+  multimode.DMAAccessMode = ADC_DMAACCESSMODE_12_10_BITS;
+  multimode.TwoSamplingDelay = ADC_TWOSAMPLINGDELAY_1CYCLE;
   if (HAL_ADCEx_MultiModeConfigChannel(&hadc1, &multimode) != HAL_OK)
   {
     Error_Handler();
@@ -354,45 +415,58 @@ static void MX_ADC1_Init(void)
 }
 
 /**
-  * @brief DAC1 Initialization Function
+  * @brief ADC2 Initialization Function
   * @param None
   * @retval None
   */
-static void MX_DAC1_Init(void)
+static void MX_ADC2_Init(void)
 {
 
-  /* USER CODE BEGIN DAC1_Init 0 */
+  /* USER CODE BEGIN ADC2_Init 0 */
 
-  /* USER CODE END DAC1_Init 0 */
+  /* USER CODE END ADC2_Init 0 */
 
-  DAC_ChannelConfTypeDef sConfig = {0};
+  ADC_ChannelConfTypeDef sConfig = {0};
 
-  /* USER CODE BEGIN DAC1_Init 1 */
+  /* USER CODE BEGIN ADC2_Init 1 */
 
-  /* USER CODE END DAC1_Init 1 */
+  /* USER CODE END ADC2_Init 1 */
 
-  /** DAC Initialization
+  /** Common config
   */
-  hdac1.Instance = DAC1;
-  if (HAL_DAC_Init(&hdac1) != HAL_OK)
+  hadc2.Instance = ADC2;
+  hadc2.Init.ClockPrescaler = ADC_CLOCK_ASYNC_DIV1;
+  hadc2.Init.Resolution = ADC_RESOLUTION_12B;
+  hadc2.Init.DataAlign = ADC_DATAALIGN_RIGHT;
+  hadc2.Init.ScanConvMode = ADC_SCAN_DISABLE;
+  hadc2.Init.EOCSelection = ADC_EOC_SINGLE_CONV;
+  hadc2.Init.LowPowerAutoWait = DISABLE;
+  hadc2.Init.ContinuousConvMode = DISABLE;
+  hadc2.Init.NbrOfConversion = 1;
+  hadc2.Init.DiscontinuousConvMode = DISABLE;
+  hadc2.Init.DMAContinuousRequests = DISABLE;
+  hadc2.Init.Overrun = ADC_OVR_DATA_PRESERVED;
+  hadc2.Init.OversamplingMode = DISABLE;
+  if (HAL_ADC_Init(&hadc2) != HAL_OK)
   {
     Error_Handler();
   }
 
-  /** DAC channel OUT1 config
+  /** Configure Regular Channel
   */
-  sConfig.DAC_SampleAndHold = DAC_SAMPLEANDHOLD_DISABLE;
-  sConfig.DAC_Trigger = DAC_TRIGGER_T2_TRGO;
-  sConfig.DAC_OutputBuffer = DAC_OUTPUTBUFFER_ENABLE;
-  sConfig.DAC_ConnectOnChipPeripheral = DAC_CHIPCONNECT_DISABLE;
-  sConfig.DAC_UserTrimming = DAC_TRIMMING_FACTORY;
-  if (HAL_DAC_ConfigChannel(&hdac1, &sConfig, DAC_CHANNEL_1) != HAL_OK)
+  sConfig.Channel = ADC_CHANNEL_16;
+  sConfig.Rank = ADC_REGULAR_RANK_1;
+  sConfig.SamplingTime = ADC_SAMPLETIME_2CYCLES_5;
+  sConfig.SingleDiff = ADC_SINGLE_ENDED;
+  sConfig.OffsetNumber = ADC_OFFSET_NONE;
+  sConfig.Offset = 0;
+  if (HAL_ADC_ConfigChannel(&hadc2, &sConfig) != HAL_OK)
   {
     Error_Handler();
   }
-  /* USER CODE BEGIN DAC1_Init 2 */
+  /* USER CODE BEGIN ADC2_Init 2 */
 
-  /* USER CODE END DAC1_Init 2 */
+  /* USER CODE END ADC2_Init 2 */
 
 }
 
@@ -417,7 +491,7 @@ static void MX_TIM1_Init(void)
   htim1.Instance = TIM1;
   htim1.Init.Prescaler = 0;
   htim1.Init.CounterMode = TIM_COUNTERMODE_UP;
-  htim1.Init.Period = 5207;
+  htim1.Init.Period = 10416;
   htim1.Init.ClockDivision = TIM_CLOCKDIVISION_DIV1;
   htim1.Init.RepetitionCounter = 0;
   htim1.Init.AutoReloadPreload = TIM_AUTORELOAD_PRELOAD_DISABLE;
@@ -440,51 +514,6 @@ static void MX_TIM1_Init(void)
   /* USER CODE BEGIN TIM1_Init 2 */
 
   /* USER CODE END TIM1_Init 2 */
-
-}
-
-/**
-  * @brief TIM2 Initialization Function
-  * @param None
-  * @retval None
-  */
-static void MX_TIM2_Init(void)
-{
-
-  /* USER CODE BEGIN TIM2_Init 0 */
-
-  /* USER CODE END TIM2_Init 0 */
-
-  TIM_ClockConfigTypeDef sClockSourceConfig = {0};
-  TIM_MasterConfigTypeDef sMasterConfig = {0};
-
-  /* USER CODE BEGIN TIM2_Init 1 */
-
-  /* USER CODE END TIM2_Init 1 */
-  htim2.Instance = TIM2;
-  htim2.Init.Prescaler = 0;
-  htim2.Init.CounterMode = TIM_COUNTERMODE_UP;
-  htim2.Init.Period = 5207;
-  htim2.Init.ClockDivision = TIM_CLOCKDIVISION_DIV1;
-  htim2.Init.AutoReloadPreload = TIM_AUTORELOAD_PRELOAD_DISABLE;
-  if (HAL_TIM_Base_Init(&htim2) != HAL_OK)
-  {
-    Error_Handler();
-  }
-  sClockSourceConfig.ClockSource = TIM_CLOCKSOURCE_INTERNAL;
-  if (HAL_TIM_ConfigClockSource(&htim2, &sClockSourceConfig) != HAL_OK)
-  {
-    Error_Handler();
-  }
-  sMasterConfig.MasterOutputTrigger = TIM_TRGO_UPDATE;
-  sMasterConfig.MasterSlaveMode = TIM_MASTERSLAVEMODE_DISABLE;
-  if (HAL_TIMEx_MasterConfigSynchronization(&htim2, &sMasterConfig) != HAL_OK)
-  {
-    Error_Handler();
-  }
-  /* USER CODE BEGIN TIM2_Init 2 */
-
-  /* USER CODE END TIM2_Init 2 */
 
 }
 
@@ -534,11 +563,8 @@ static void MX_DMA_Init(void)
 
   /* DMA interrupt init */
   /* DMA1_Channel1_IRQn interrupt configuration */
-  HAL_NVIC_SetPriority(DMA1_Channel1_IRQn, 0, 0);
+  HAL_NVIC_SetPriority(DMA1_Channel1_IRQn, 5, 0);
   HAL_NVIC_EnableIRQ(DMA1_Channel1_IRQn);
-  /* DMA1_Channel3_IRQn interrupt configuration */
-  HAL_NVIC_SetPriority(DMA1_Channel3_IRQn, 0, 0);
-  HAL_NVIC_EnableIRQ(DMA1_Channel3_IRQn);
 
 }
 
@@ -555,6 +581,7 @@ static void MX_GPIO_Init(void)
   /* GPIO Ports Clock Enable */
   __HAL_RCC_GPIOC_CLK_ENABLE();
   __HAL_RCC_GPIOA_CLK_ENABLE();
+  __HAL_RCC_GPIOB_CLK_ENABLE();
 
 /* USER CODE BEGIN MX_GPIO_Init_2 */
 /* USER CODE END MX_GPIO_Init_2 */
@@ -562,7 +589,238 @@ static void MX_GPIO_Init(void)
 
 /* USER CODE BEGIN 4 */
 
+void HAL_ADC_ConvHalfCpltCallback(ADC_HandleTypeDef *hadc){
+
+	portBASE_TYPE pxHigherPriorityTaskWoken = pdFALSE;
+
+	uint8_t bufferside=1;
+	xQueueSendToBackFromISR(adchalfselectQueueHandle, &bufferside, &pxHigherPriorityTaskWoken);
+
+	portYIELD_FROM_ISR(pxHigherPriorityTaskWoken);
+
+}
+void HAL_ADC_ConvCpltCallback(ADC_HandleTypeDef *hadc){
+
+	portBASE_TYPE pxHigherPriorityTaskWoken = pdFALSE;
+
+	uint8_t bufferside=2;
+	xQueueSendToBackFromISR(adchalfselectQueueHandle, &bufferside, &pxHigherPriorityTaskWoken);
+
+	portYIELD_FROM_ISR(pxHigherPriorityTaskWoken);
+}
+
+void HAL_UART_RxCpltCallback(UART_HandleTypeDef *huart){
+
+        if (rx_buffer[rx_index] == ETX) {
+
+        	portBASE_TYPE pxHigherPriorityTaskWoken = pdFALSE;
+            xQueueSendFromISR(uartQueue, rx_buffer, &pxHigherPriorityTaskWoken);
+            portYIELD_FROM_ISR(pxHigherPriorityTaskWoken);
+
+            rx_index = 0;
+        } else {
+
+            rx_index++;
+        }
+        HAL_UART_Receive_IT(&huart4, &rx_buffer[rx_index], 1);
+
+}
+
+
+void UART_SendPacket(UART_HandleTypeDef *huart, uint8_t *data, uint16_t len) {
+    uint8_t send_buffer[256];
+    uint16_t idx = 0;
+
+    send_buffer[idx++] = STX;
+
+    for (int i = 0; i < len; i++) {
+        if (data[i] == STX || data[i] == ETX || data[i] == ESCAPE) {
+            // Se for um código especial, envie ESCAPE + valor + 0x20
+            send_buffer[idx++] = ESCAPE;
+            send_buffer[idx++] = data[i] + 0x20;
+        } else {
+            // Caso contrário, envie o valor normal
+            send_buffer[idx++] = data[i];
+        }
+    }
+
+    send_buffer[idx++] = ETX;  // Fim do pacote (ETX)
+
+    // Envia os dados via UART
+    HAL_UART_Transmit(huart, send_buffer, idx, HAL_MAX_DELAY);
+}
+
+// Função para receber pacotes com tratamento de ESCAPE CODE
+void UART_ReceivePacket(UART_HandleTypeDef *huart, uint8_t *recv_buffer, uint16_t *recv_len) {
+    uint8_t byte;
+    uint16_t idx = 0;
+    HAL_StatusTypeDef status;
+
+    *recv_len = 0;
+    while (1) {
+        // Recebe um byte via UART
+        status = HAL_UART_Receive(huart, &byte, 1, HAL_MAX_DELAY);
+        if (status == HAL_OK) {
+            if (byte == ESCAPE) {
+                // Se o byte for ESCAPE, o próximo byte é um valor especial
+                HAL_UART_Receive(huart, &byte, 1, HAL_MAX_DELAY);
+                recv_buffer[idx++] = byte - 0x20;  // Subtrai 0x20 para restaurar o valor original
+            } else {
+                recv_buffer[idx++] = byte;
+            }
+
+            // Verifica se recebeu o ETX (fim do pacote)
+            if (recv_buffer[idx - 1] == ETX) {
+                *recv_len = idx;
+                break;
+            }
+        }
+    }
+}
+
+// Função para preparar a resposta com base no OPCODE recebido
+void PrepareResponse(uint8_t opcode, uint8_t *response_data, uint16_t *response_len) {
+    switch (opcode) {
+        case 0x10:  // Exemplo de OPCODE 1
+            response_data[0] = 0x10;  // Resposta para o OPCODE 1
+            response_data[1] = 0x20;
+            *response_len = 2;
+            break;
+        default:
+            response_data[0] = 0xFF;
+            *response_len = 1;
+            break;
+    }
+}
+
+
+
 /* USER CODE END 4 */
+
+/* USER CODE BEGIN Header_StartUartTask */
+/**
+  * @brief  Function implementing the uartTask thread.
+  * @param  argument: Not used
+  * @retval None
+  */
+/* USER CODE END Header_StartUartTask */
+void StartUartTask(void *argument)
+{
+  /* USER CODE BEGIN 5 */
+	uint8_t packet[256];
+    uint16_t recv_len;
+
+  /* Infinite loop */
+  while(1)
+  {
+
+	if (xQueueReceive(uartQueue, packet, portMAX_DELAY) == pdTRUE) {
+
+		if (packet[0] == STX && packet[recv_len - 1] == ETX) {
+			uint8_t opcode = packet[2];
+			uint8_t response_buffer[256];
+			uint16_t response_len;
+
+			// Prepara a resposta com base no OPCODE
+			PrepareResponse(opcode, response_buffer, &response_len);
+
+			// Envia o pacote de resposta
+			HAL_UART_Transmit_IT(&huart4, response_buffer, response_len);
+		}
+	}
+  }
+  /* USER CODE END 5 */
+}
+
+/* USER CODE BEGIN Header_StartAdcTask */
+/**
+* @brief Function implementing the adcTask thread.
+* @param argument: Not used
+* @retval None
+*/
+/* USER CODE END Header_StartAdcTask */
+void StartAdcTask(void *argument)
+{
+  /* USER CODE BEGIN StartAdcTask */
+
+	uint8_t sidebuffer_choice = 0;
+	uint16_t i = 0;
+
+	HAL_ADCEx_MultiModeStart_DMA(&hadc1, (uint32_t*)adcBuffer, F_BUFFER_SIZE);
+	HAL_TIM_Base_Start(&htim1);
+
+	cc_voltage = 0.0;
+	cc_current = 0.0;
+	rms_voltage = 0.0;
+	rms_current = 0.0;
+	pot_ativa = 0.0;
+	pot_aparente = 0.0;
+	pot_reativa = 0.0;
+	pf = 0.0;
+  /* Infinite loop */
+  while(1)
+  {
+		xQueueReceive(adchalfselectQueueHandle, &sidebuffer_choice, portMAX_DELAY);
+
+		if (sidebuffer_choice == 1){
+			i = 0;
+		}
+		if (sidebuffer_choice == 2){
+			i = H_BUFFER_SIZE;
+		}
+
+		for(uint16_t c = i; c < H_BUFFER_SIZE; c++){
+				// Extrai os 16 bits menos significativos
+				adc1_voltage[c] = (((uint16_t)(adcBuffer[c] & 0x0000FFFF)) * V1_SENSOR_MULT * V1_REAL_MULT);
+
+				cc_voltage += adc1_voltage[c];
+
+				// Extrai os 16 bits mais significativos
+				adc2_current[c] = (((uint16_t)((adcBuffer[c] >> 16) & 0x0000FFFF)) * C2_SENSOR_MULT * C2_REAL_MULT);
+
+				cc_current += adc2_current[c];
+		}
+
+		cc_voltage /= H_BUFFER_SIZE;
+		cc_current /= H_BUFFER_SIZE;
+
+		for(uint16_t c = i; c < H_BUFFER_SIZE; c++){
+				rms_voltage += (adc1_voltage[c] - cc_voltage) * (adc1_voltage[c] - cc_voltage);
+				rms_current += (adc2_current[c] - cc_current) * (adc2_current[c] - cc_current);
+				pot_ativa += ((adc2_current[c] - cc_current) * (adc1_voltage[c] - cc_voltage));
+		}
+
+		rms_voltage = sqrtf(rms_voltage/H_BUFFER_SIZE);
+		rms_current = sqrtf(rms_current/H_BUFFER_SIZE);
+
+		pot_aparente = (rms_voltage * rms_current);
+		pot_reativa = (pot_aparente * pot_aparente)-(pot_ativa * pot_ativa);
+		pf = pot_ativa/pot_aparente;
+
+  }
+  /* USER CODE END StartAdcTask */
+}
+
+/**
+  * @brief  Period elapsed callback in non blocking mode
+  * @note   This function is called  when TIM7 interrupt took place, inside
+  * HAL_TIM_IRQHandler(). It makes a direct call to HAL_IncTick() to increment
+  * a global variable "uwTick" used as application time base.
+  * @param  htim : TIM handle
+  * @retval None
+  */
+void HAL_TIM_PeriodElapsedCallback(TIM_HandleTypeDef *htim)
+{
+  /* USER CODE BEGIN Callback 0 */
+
+  /* USER CODE END Callback 0 */
+  if (htim->Instance == TIM7) {
+    HAL_IncTick();
+  }
+  /* USER CODE BEGIN Callback 1 */
+
+  /* USER CODE END Callback 1 */
+}
 
 /**
   * @brief  This function is executed in case of error occurrence.
