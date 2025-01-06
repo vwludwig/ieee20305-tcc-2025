@@ -23,11 +23,66 @@
 /* Private includes ----------------------------------------------------------*/
 /* USER CODE BEGIN Includes */
 #include "math.h"
+#include "queue.h"
+#include "semphr.h"
 
 /* USER CODE END Includes */
 
 /* Private typedef -----------------------------------------------------------*/
 /* USER CODE BEGIN PTD */
+
+ typedef enum UART_MACHINE_STATES
+{
+  UMS_RECEIVING,
+  UMS_PROCESSING_RESPONSE_PACKAGE,
+  UMS_SENDING_RESPONSE,
+  UMS_TIMEOUT						//sem rotina por enqnt...
+}UART_MACHINE_STATES;
+
+ typedef enum UART_PACKAGE_PARTS
+{
+  UPP_STX,
+  UPP_DEVICE_ADDRESS,
+  UPP_OPCODE,
+  UPP_DATA_LEN,
+  UPP_DATA,
+  UPP_CHECKSUM,
+  UPP_ETX
+}UART_PACKAGE_PARTS;
+
+
+ typedef enum ERRORS_LISTtag
+ {
+     EL_NO_ERROR = 0x00,
+     EL_INVALID_OPCODE = 0x01,
+     EL_INVALID_DATA = 0x02,
+     EL_MEMORY_WRITE_ERROR = 0x03,
+
+     EL_NUM_ERRORS
+ }ERRORS_LIST;
+
+
+// Pergunta
+//    0x10 a 0x7F
+// Resposta
+//    0x90 a 0xFF
+
+typedef enum UART_OPCODES
+{
+    // Busca de dados e informações 0x10 a 0x1F
+    UO_KEEPALIVE                        = 0x10,
+	UO_GETSOMETHING						= 0x11,
+
+
+    // Ações de configuração e ajustes 0x20 a 0x3F
+	UO_SETCONFIG						= 0x20,
+
+    // Operação ou outro 0x40 a 0x5F
+
+    UO_NUM_OF
+
+}UART_OPCODES;
+
 
 /* USER CODE END PTD */
 
@@ -47,14 +102,17 @@
 #define F_BUFFER_SIZE	256
 #define H_BUFFER_SIZE	128
 
-//UART
+
+
+#define STX 0x02
+#define ETX 0x03
 #define ESC 0x10
 #define ESC_INC 0x20
 #define DEVICE_ADDR  0x01
 
 #define RESPONSE_OPCODE_MASK 0x80
 
-#define MAX_PACKAGE_LEN 150
+#define MAX_PACKAGE_LEN 150 //TODO: change it
 
 /* USER CODE END PM */
 
@@ -86,10 +144,15 @@ osMessageQueueId_t adchalfselectQueueHandle;
 const osMessageQueueAttr_t adchalfselectQueue_attributes = {
   .name = "adchalfselectQueue"
 };
-/* Definitions for uartqueue */
-osMessageQueueId_t uartqueueHandle;
-const osMessageQueueAttr_t uartqueue_attributes = {
-  .name = "uartqueue"
+/* Definitions for rxuartqueue */
+osMessageQueueId_t rxuartqueueHandle;
+const osMessageQueueAttr_t rxuartqueue_attributes = {
+  .name = "rxuartqueue"
+};
+/* Definitions for txuartqueue */
+osMessageQueueId_t txuartqueueHandle;
+const osMessageQueueAttr_t txuartqueue_attributes = {
+  .name = "txuartqueue"
 };
 /* Definitions for uartBinSema */
 osSemaphoreId_t uartBinSemaHandle;
@@ -97,6 +160,22 @@ const osSemaphoreAttr_t uartBinSema_attributes = {
   .name = "uartBinSema"
 };
 /* USER CODE BEGIN PV */
+
+typedef struct UART_PACKAGE_PROTOCOL
+{
+  unsigned char uc_Stx;
+  unsigned char uc_DeviceAddress;
+  unsigned char uc_OpCode;
+  unsigned char uc_Datalen;
+  unsigned char uc_Data[MAX_PACKAGE_LEN];
+  unsigned char uc_Checksum;
+  unsigned char uc_Etx;
+}UART_PACKAGE_PROTOCOL;
+
+
+uint8_t rx_buffer;
+uint8_t tx_buffer;
+
 
 uint32_t 	adcBuffer[F_BUFFER_SIZE];
 float 		adc1_voltage[H_BUFFER_SIZE];
@@ -112,36 +191,21 @@ float pot_ativa = 0.0;
 float pf = 0.0;
 
 
-uint8_t rx_buffer[256];
-uint8_t tx_buffer[256];
-uint16_t rx_index = 0;
 
-
-enum UART_PACKAGE_PARTS
-{
-  UPP_STX,
-  UPP_DEVICE_ADDRESS,
-  UPP_OPCODE,
-  UPP_DATA_LEN,
-  UPP_DATA,
-  UPP_CHECKSUM,
-  UPP_ETX
-};
-
-struct UART_PACKAGE_PROTOCOL
-{
-  unsigned char uc_Stx;
-  unsigned char uc_DeviceAddress;
-  unsigned char uc_OpCode;
-  unsigned char uc_Datalen;
-  unsigned char uc_Data[MAX_PACKAGE_LEN];
-  unsigned char uc_Checksum;
-  unsigned char uc_Etx;
-};
-
+UART_MACHINE_STATES m_udtUartmachineStates;
 UART_PACKAGE_PARTS  m_udtUartPackageParts;
 UART_PACKAGE_PROTOCOL m_udtReceptionPackage;
 UART_PACKAGE_PROTOCOL m_udtTransmitionPackage;
+
+// Dado que está sendo processado no pacote
+unsigned char m_ucCorrentDataPos;
+
+// CheckSum Calculado
+unsigned char m_ucCalculatedChecksum;
+
+// Indica que está tratando um scape char
+uint8_t m_blnProcessingScapeChar;
+
 
 /* USER CODE END PV */
 
@@ -159,7 +223,41 @@ void StartAdcTask(void *argument);
 
 /* USER CODE BEGIN PFP */
 
+/**
+* void ResetSerial()
+*
+* Rotina responsável por reinicializar o protocolo serial para aguardar um novo pacote.
+*
+* @author Vinicius Ludwig
+*/
+void ResetSerial();
 
+/**
+* unsigned char CalculateChecksum(unsigned char* udtpackage, unsigned char ucLen)
+*
+* Calcula o checksum de um pacote.
+*
+* @author Vinicius Ludwig
+*/
+unsigned char CalculateChecksum(unsigned char* udtpackage, unsigned char ucLen);
+
+/**
+* bool SendData(unsigned char ucDataTosend, bool blnIsSpecialChar)
+*
+* Valida e envia um dado via serial
+*
+* @author Vinicius Ludwig
+*/
+uint8_t SendData(unsigned char ucDataTosend, uint8_t blnIsSpecialChar);
+
+/**
+* void UartMainProcess(unsigned char ucData)
+*
+* Chamado do processamento da serial na task da uart.
+*
+* @author Vinicius Ludwig
+*/
+void UartMainProcess(unsigned char ucData);
 
 /* USER CODE END PFP */
 
@@ -233,8 +331,11 @@ int main(void)
   /* creation of adchalfselectQueue */
   adchalfselectQueueHandle = osMessageQueueNew (1, sizeof(uint8_t), &adchalfselectQueue_attributes);
 
-  /* creation of uartqueue */
-  uartqueueHandle = osMessageQueueNew (128, sizeof(uint8_t), &uartqueue_attributes);
+  /* creation of rxuartqueue */
+  rxuartqueueHandle = osMessageQueueNew (128, sizeof(uint8_t), &rxuartqueue_attributes);
+
+  /* creation of txuartqueue */
+  txuartqueueHandle = osMessageQueueNew (128, sizeof(uint8_t), &txuartqueue_attributes);
 
   /* USER CODE BEGIN RTOS_QUEUES */
   /* add queues, ... */
@@ -548,6 +649,8 @@ static void MX_UART4_Init(void)
   }
   /* USER CODE BEGIN UART4_Init 2 */
 
+  HAL_UART_Receive_IT(&huart4, &rx_buffer, 1);
+
   /* USER CODE END UART4_Init 2 */
 
 }
@@ -589,6 +692,644 @@ static void MX_GPIO_Init(void)
 
 /* USER CODE BEGIN 4 */
 
+
+////////////////////////////////////////////////////////////////////////////////////////////////////////
+////////////////////////////////////////////////////////////////////////////////////////////////////////
+//-------------------------------------------  UART --------------------------------------------------//
+////////////////////////////////////////////////////////////////////////////////////////////////////////
+////////////////////////////////////////////////////////////////////////////////////////////////////////
+
+
+/**
+* void ResetSerial()
+*
+* Rotina responsável por reinicializar o protocolo serial para aguardar um novo pacote.
+*
+* @author Vinicius Ludwig
+*/
+void ResetSerial()
+{
+  // Inicialmente estamos aguardando a recepção dos dados do dispositivo remoto.
+  m_udtUartmachineStates = UMS_RECEIVING;
+
+  // Inicialmente estamos aguardando o STX
+  m_udtUartPackageParts = UPP_STX;
+
+  // Cria os ponteiros para os pacotes
+  unsigned char* pucReceptionpackage = &m_udtReceptionPackage.uc_Stx;
+  unsigned char* pucTranmitionpackage = &m_udtTransmitionPackage.uc_Stx;
+
+  unsigned char ucPosition = 0;
+
+  // Prepara a varredura
+  while(ucPosition <  sizeof(UART_PACKAGE_PROTOCOL))
+  {
+      *pucReceptionpackage = 0x00;
+      *pucTranmitionpackage = 0x00;
+      pucReceptionpackage++;
+      pucTranmitionpackage++;
+
+     ucPosition++;
+  }
+
+  // Inicializa a posição a ser processada como 0.
+  m_ucCorrentDataPos = 0x00;
+
+  // Inicializa o Checksum calculado com 0
+  m_ucCalculatedChecksum = 0;
+}
+
+
+/**
+* void UartMainProcess()
+*
+* Chamado do processamento da serial no loop principal.
+*
+* @author Vinicius Ludwig
+*/
+void UartMainProcess(unsigned char ucData)
+{
+  switch (m_udtUartmachineStates)
+  {
+    case UMS_RECEIVING:
+    {
+
+//      // Verifica se existem dados para ler
+//      if(Serial2.available() == 0)
+//      {
+//         // Sem dados para ler.
+//         ///////////////////////
+//
+//         // Cai fora
+//         break;
+//       }
+
+      // recebe o dado da queue
+
+
+      /////////////////////////////////////////////////
+      // Processamento dos caracteres especiais
+      /////////////////////////////////////////////////
+
+      // Verifica se é um inicializador de pacotes
+      if( ucData == STX )
+      {
+          // Inicializador de pacotes.
+          //////////////////////////////
+
+          // Reseta a serial;
+          ResetSerial();
+
+          // Guarda o dado recebido
+          m_udtReceptionPackage.uc_Stx = STX;
+
+          // Vai para o próximo estado
+          m_udtUartPackageParts = (UART_PACKAGE_PARTS)UPP_DEVICE_ADDRESS;
+
+          // Cai fora.
+          break;
+      }
+
+      // Verifica se é um terminador de pacotes
+      if( ucData == ETX )
+      {
+        // Terminador de pacotes.
+        //////////////////////////////
+
+        // Verifica se está na hora de receber esse dado.
+        if( m_udtUartPackageParts != (UART_PACKAGE_PARTS)UPP_ETX )
+        {
+          // Dado incorreto.
+          //////////////////
+
+          // Reseta a serial;
+          ResetSerial();
+
+          // Cai fora.
+          break;
+        }
+
+        m_udtReceptionPackage.uc_Etx = ETX;
+
+        // Vai para o próximo estado
+        m_udtUartmachineStates = UMS_PROCESSING_RESPONSE_PACKAGE;
+        m_udtUartPackageParts = (UART_PACKAGE_PARTS)UPP_STX;
+
+        // Cai fora
+        break;
+      }
+
+      // Verifica se é um scape char e se esse deve ser tratado
+      if(ucData == ESC)
+      {
+        m_blnProcessingScapeChar = 1;
+
+        break;
+      }
+
+      // Verifica se está no dado pós scape char
+      if(m_blnProcessingScapeChar == 1)
+      {
+        // Dado pós scape char
+        ///////////////////////
+
+        // Processa o dado
+        ucData = ucData & ~ESC_INC;
+
+        // Indica que já tratou
+        m_blnProcessingScapeChar = 0;
+      }
+
+      switch (m_udtUartPackageParts)
+      {
+        case UPP_DEVICE_ADDRESS:
+        {
+          // Verifica se o dado recebido é o correto.
+          if( ucData == DEVICE_ADDR )
+          {
+              // Dado correto.
+              //////////////////
+
+              // Guarda o dado recebido
+              m_udtReceptionPackage.uc_DeviceAddress = ucData;
+
+              // Vai para o próximo estado
+              m_udtUartPackageParts = (UART_PACKAGE_PARTS)UPP_OPCODE;
+          }
+        }
+        break;
+        case UPP_OPCODE:
+        {
+          // Guarda o dado recebido
+          m_udtReceptionPackage.uc_OpCode = ucData;
+
+          // Vai para o próximo estado
+          m_udtUartPackageParts = (UART_PACKAGE_PARTS)UPP_DATA_LEN;
+
+        }
+        break;
+        case UPP_DATA_LEN:
+        {
+          // Verifica se o dado recebido é o correto.
+          if( ucData >= MAX_PACKAGE_LEN )
+          {
+              // OpCode inválido.
+              //////////////////
+
+              // Reseta a serial;
+              ResetSerial();
+
+              // Cai fora.
+              break;
+          }
+
+          // Guarda o dado recebido
+          m_udtReceptionPackage.uc_Datalen = ucData;
+
+          // Verifica se existirão dados
+          if (m_udtReceptionPackage.uc_Datalen > 0)
+          {
+              // Existirão dados.
+              // /////////////////
+
+              // Vai para o próximo estado
+              m_udtUartPackageParts = (UART_PACKAGE_PARTS)UPP_DATA;
+          }
+          else
+          {
+              // Não existirão dados.
+              // /////////////////////
+
+              // Vai para o próximo estado
+              m_udtUartPackageParts = (UART_PACKAGE_PARTS)UPP_CHECKSUM;
+          }
+
+
+        }
+        break;
+        case UPP_DATA:
+        {
+          // Guarda o dado recebido
+          m_udtReceptionPackage.uc_Data[m_ucCorrentDataPos] = ucData;
+
+          // Incrementa a posição
+          m_ucCorrentDataPos++;
+
+          // Verifica se atingiu o número de dados
+          if(m_ucCorrentDataPos >= m_udtReceptionPackage.uc_Datalen)
+          {
+            // Chegou ao fim dos dados
+            /////////////////////////////
+
+            // Vai para o próximo estado
+            m_udtUartPackageParts = (UART_PACKAGE_PARTS)UPP_CHECKSUM;
+          }
+        }
+        break;
+        case UPP_CHECKSUM:
+        {
+          // Guarda o dado recebido
+          m_udtReceptionPackage.uc_Checksum = ucData;
+
+          // Calcula o checksum do pacote
+          m_ucCalculatedChecksum = CalculateChecksum(&m_udtReceptionPackage.uc_Stx, (1 + 1 + 1 + 1 + m_udtReceptionPackage.uc_Datalen +1));
+
+          // Verifica se o checksum bateu
+          if(m_udtReceptionPackage.uc_Checksum != m_ucCalculatedChecksum)
+          {
+            // Não bateu
+            /////////////
+
+            // Reseta a serial;
+            ResetSerial();
+
+            // Cai fora
+            break;
+          }
+
+          // Vai para o próximo estado
+          m_udtUartPackageParts = (UART_PACKAGE_PARTS)UPP_ETX;
+        }
+        break;
+      }
+    }
+    break;
+    case UMS_PROCESSING_RESPONSE_PACKAGE:
+    {
+      // Prepara os dados fixos do pacote
+      m_udtTransmitionPackage.uc_Stx = STX;
+      m_udtTransmitionPackage.uc_Etx = ETX;
+      m_udtTransmitionPackage.uc_DeviceAddress = 0x01;
+      m_udtTransmitionPackage.uc_OpCode = RESPONSE_OPCODE_MASK | m_udtReceptionPackage.uc_OpCode;
+
+
+      switch( m_udtReceptionPackage.uc_OpCode )
+      {
+         case UO_KEEPALIVE:
+         {
+            // Prepara o pacote de resposta
+            m_udtTransmitionPackage.uc_Datalen = 0x00;
+
+         }
+         break;
+         case UO_GETSOMETHING:
+                 {
+
+                     // Prepara o pacote de resposta
+                     m_udtTransmitionPackage.uc_Datalen = 0x04;
+
+
+                     m_udtTransmitionPackage.uc_Data[0] = (uint8_t)(0x00);
+                     m_udtTransmitionPackage.uc_Data[1] = (uint8_t)(0x00);
+                     m_udtTransmitionPackage.uc_Data[2] = (uint8_t)(0x00);
+                     m_udtTransmitionPackage.uc_Data[3] = (uint8_t)(0x00);
+
+                 }
+                 break;
+         case UO_SETCONFIG:
+         		 {
+         			 ERRORS_LIST udtError = EL_NO_ERROR;
+         			 uint8_t blnStatus = 0;
+
+         			 // Verifica se o tamanho do pacote condiz com o esperado
+         			 if (m_udtReceptionPackage.uc_Datalen == 4)
+         			 {
+         				 // Era a opcao 1
+         				 //////////////////////////////////
+
+
+         			 }
+         			 else if (m_udtReceptionPackage.uc_Datalen == 0)
+         			 {
+         				 // Ou a opcao 2
+         				 ///////////////////////////////
+
+         				// Executa alguma funcao que retorna booleano de validação
+         				//blnStatus = SaveParameters(bytLocation);
+         			 }
+         			 else
+         			 {
+         				 //Erro, dados inválidos
+         				 /////////////////////////
+
+         				 // Indica o erro
+         				 udtError = EL_INVALID_DATA;
+         			 }
+
+         			 //Verifica se já veio com erro
+         			 if (udtError == EL_NO_ERROR)
+         			 {
+         				 // Chegou sem erros
+         				 ////////////////////
+
+         				 // Verifica se deu algum erro de escrita
+         				 if (blnStatus == 0)
+         				 {
+         					 // Deu erro de escrita
+         					 /////////////////////////
+
+         					 // Guarda o erro.
+         					 udtError = EL_MEMORY_WRITE_ERROR;
+         				 }
+         			 }
+
+
+         			// Prepara os dados que serão enviados (resposta de valdiação)
+         			m_udtTransmitionPackage.uc_Datalen = 0x01;	//tamanho do pacote de resposta
+         			m_udtTransmitionPackage.uc_Data[0] = (uint8_t)udtError & 0xFF;
+
+         		 }
+         		 break;
+
+
+
+		 default:
+		 {
+			 // Retorna um erro
+			 ///////////////////
+
+			 // Força o OPCODE de erro
+
+			 m_udtTransmitionPackage.uc_OpCode = RESPONSE_OPCODE_MASK | UO_SETCONFIG;
+			m_udtTransmitionPackage.uc_Datalen = 0x01;
+			m_udtTransmitionPackage.uc_Data[0] = EL_INVALID_OPCODE;
+		 }
+      }
+
+      // Calcula o Checksum do pacote a ser enviado
+      m_udtTransmitionPackage.uc_Checksum = CalculateChecksum(&m_udtTransmitionPackage.uc_Stx, (1 + 1 + 1 + 1 + m_udtTransmitionPackage.uc_Datalen + 1));
+
+      // Vai para o próximo estado
+      m_udtUartmachineStates = UMS_SENDING_RESPONSE;
+      m_udtUartPackageParts = (UART_PACKAGE_PARTS)UPP_STX;
+    }
+    break;
+    case UMS_SENDING_RESPONSE:
+    {
+      // TODO Aqui poderia verificar se a serial está disponivel para responder
+//      if( Serial2.availableForWrite() == 0 )
+//      {
+//        // Não pode transmitir.
+//        /////////////////////////
+//
+//        // Cai fora.
+//        break;
+//      }
+
+      switch (m_udtUartPackageParts)
+      {
+        case UPP_STX:
+        {
+          // Escreve
+          if(SendData(m_udtTransmitionPackage.uc_Stx, 1) == 1)
+          {
+            // Vai para o próximo estado
+            m_udtUartPackageParts = (UART_PACKAGE_PARTS)UPP_DEVICE_ADDRESS;
+          }
+        }
+        break;
+        case UPP_DEVICE_ADDRESS:
+        {
+          // Escreve
+          if(SendData(m_udtTransmitionPackage.uc_DeviceAddress, 0) == 1)
+          {
+            // Vai para o próximo estado
+            m_udtUartPackageParts = (UART_PACKAGE_PARTS)UPP_OPCODE;
+          }
+        }
+        break;
+        case UPP_OPCODE:
+        {
+          // Escreve
+          if(SendData(m_udtTransmitionPackage.uc_OpCode, 0) == 1)
+          {
+            // Vai para o próximo estado
+            m_udtUartPackageParts = (UART_PACKAGE_PARTS)UPP_DATA_LEN;
+          }
+        }
+        break;
+        case UPP_DATA_LEN:
+        {
+          // Escreve
+          if(SendData(m_udtTransmitionPackage.uc_Datalen, 0) == 1)
+          {
+            // Zera a posição
+            m_ucCorrentDataPos = 0x00;
+
+            // Verifica se existirão dados
+            if (m_udtTransmitionPackage.uc_Datalen > 0)
+            {
+                // Existirão dados.
+                // /////////////////
+
+                // Vai para o próximo estado
+                m_udtUartPackageParts = (UART_PACKAGE_PARTS)UPP_DATA;
+            }
+            else
+            {
+                // Não existirão dados.
+                ////////////////////////
+
+                // Vai para o próximo estado
+                m_udtUartPackageParts = (UART_PACKAGE_PARTS)UPP_CHECKSUM;
+            }
+          }
+        }
+        break;
+        case UPP_DATA:
+        {
+          // Escreve
+          if(SendData(m_udtTransmitionPackage.uc_Data[m_ucCorrentDataPos], 0) == 1)
+          {
+            // Incrementa a posição
+            m_ucCorrentDataPos++;
+
+            // Verifica se atingiu o número de dados
+            if(m_ucCorrentDataPos >= m_udtTransmitionPackage.uc_Datalen)
+            {
+              // Chegou ao fim dos dados
+              /////////////////////////////
+
+              // Vai para o próximo estado
+              m_udtUartPackageParts = (UART_PACKAGE_PARTS)UPP_CHECKSUM;
+            }
+          }
+
+        }
+        break;
+        case UPP_CHECKSUM:
+        {
+          // Escreve
+          if(SendData(m_udtTransmitionPackage.uc_Checksum, 0) == 1)
+          {
+            // Vai para o próximo estado
+            m_udtUartPackageParts = (UART_PACKAGE_PARTS)UPP_ETX;
+          }
+        }
+        break;
+        case UPP_ETX:
+        {
+          // Escreve
+          if(SendData(m_udtTransmitionPackage.uc_Etx, 1) == 1)
+          {
+            // Vai aguardar o próximo pacote
+            ResetSerial();
+          }
+        }
+        break;
+      }
+    }
+    break;
+    case UMS_TIMEOUT:
+    {
+      // Timeout
+      ////////////
+
+      // Reseta a serial;
+      ResetSerial();
+    }
+    break;
+  }
+
+}
+
+
+/**
+* bool SendData(unsigned char ucDataTosend, bool blnIsSpecialChar)
+*
+* Valida e envia um dado via serial
+*
+* @author Vinicius Ludwig
+*/
+uint8_t SendData(unsigned char ucDataTosend, uint8_t blnIsSpecialChar)
+{
+
+  // Cria a variável de retorno indicando que foi um dado normal
+  // false indica um scape char e não deve ir para o próximo
+  uint8_t blnReturnValue = 1;
+
+  // Verifica se é um caractere especial.
+  if( blnIsSpecialChar == 0 )
+  {
+    // Não é um caractere especial,
+    // devemos tratar
+    ///////////////////////////////
+
+    // Verifica se processou um caractere especial na última passada.
+    if( m_blnProcessingScapeChar == 1 )
+    {
+      // Sinalizou um caractere igual a um
+      // especial na última passada.
+      ///////////////////////////////////////
+
+      // Altera o dado
+      ucDataTosend = ucDataTosend | ESC_INC;
+
+      // Indica que já processou.
+      m_blnProcessingScapeChar = 0;
+    }
+    else
+    {
+      // Não foi um igual a especial na última passada.
+      ////////////////////////////////////////////////////
+
+      // Verifica se é item igual a um especial
+      if(
+          (ucDataTosend == STX)
+          ||(ucDataTosend == ETX)
+          ||(ucDataTosend == ESC))
+      {
+        // É um especial
+        /////////////////
+
+        // Eviou um scape char, não deve avançar
+        blnReturnValue = 0;
+
+        // Indica que enviou um especial
+        m_blnProcessingScapeChar = 1;
+
+        // altera o dado
+        ucDataTosend = ESC;
+      }
+    }
+  }
+
+  // TODO Escreve - envia pra queue de resposta
+
+  xQueueSend(txuartqueueHandle, &ucDataTosend, portMAX_DELAY);
+
+  //Serial2.write(ucDataTosend);
+
+  return blnReturnValue;
+}
+
+
+/**
+* unsigned char CalculateChecksum(unsigned char* udtpackage, unsigned char ucLen)
+*
+* Calcula o checksum de um pacote.
+*
+* @author Vinicius Ludwig
+*/
+unsigned char CalculateChecksum(unsigned char* udtpackage, unsigned char ucLen)
+{
+  // Cria a inicializa a variável de retorno.
+  unsigned char ucChecksum = 0;
+
+  // Cria a variável do controle de posição
+  unsigned char ucPosition = 0;
+
+  // Prepara a varredura
+  while(ucPosition < ucLen)
+  {
+    //Varre os dados.
+    //////////////////
+
+    // Soma  o valor da vez.
+    ucChecksum = ucChecksum + *udtpackage;
+
+    // Atualiza os indices
+    udtpackage++;
+    ucPosition++;
+
+  }
+
+  // Retorna a informação
+  return ucChecksum;
+}
+
+
+
+
+
+////////////////////////////////////////////////////////////////////////////////////////////////////////
+////////////////////////////////////////////////////////////////////////////////////////////////////////
+//----------------------------------------- CALLBACKS ------------------------------------------------//
+////////////////////////////////////////////////////////////////////////////////////////////////////////
+////////////////////////////////////////////////////////////////////////////////////////////////////////
+
+void HAL_UART_RxCpltCallback(UART_HandleTypeDef *huart)
+{
+	portBASE_TYPE pxHigherPriorityTaskWoken = pdFALSE;
+
+	xQueueSendFromISR(rxuartqueueHandle, &rx_buffer, &pxHigherPriorityTaskWoken);
+
+	HAL_UART_Receive_IT(&huart4, (uint8_t *)&rx_buffer, 1);
+
+	portYIELD_FROM_ISR(pxHigherPriorityTaskWoken);
+}
+
+
+void HAL_UART_TxCpltCallback(UART_HandleTypeDef *huart)
+{
+	portBASE_TYPE pxHigherPriorityTaskWoken = pdFALSE;
+
+	xSemaphoreGiveFromISR(uartBinSemaHandle, &pxHigherPriorityTaskWoken);
+
+	portYIELD_FROM_ISR(pxHigherPriorityTaskWoken);
+}
+
+
 void HAL_ADC_ConvHalfCpltCallback(ADC_HandleTypeDef *hadc){
 
 	portBASE_TYPE pxHigherPriorityTaskWoken = pdFALSE;
@@ -609,89 +1350,6 @@ void HAL_ADC_ConvCpltCallback(ADC_HandleTypeDef *hadc){
 	portYIELD_FROM_ISR(pxHigherPriorityTaskWoken);
 }
 
-void HAL_UART_RxCpltCallback(UART_HandleTypeDef *huart){
-
-        if (rx_buffer[rx_index] == ETX) {
-
-        	portBASE_TYPE pxHigherPriorityTaskWoken = pdFALSE;
-            xQueueSendFromISR(uartQueue, rx_buffer, &pxHigherPriorityTaskWoken);
-            portYIELD_FROM_ISR(pxHigherPriorityTaskWoken);
-
-            rx_index = 0;
-        } else {
-
-            rx_index++;
-        }
-        HAL_UART_Receive_IT(&huart4, &rx_buffer[rx_index], 1);
-
-}
-
-
-void UART_SendPacket(UART_HandleTypeDef *huart, uint8_t *data, uint16_t len) {
-    uint8_t send_buffer[256];
-    uint16_t idx = 0;
-
-    send_buffer[idx++] = STX;
-
-    for (int i = 0; i < len; i++) {
-        if (data[i] == STX || data[i] == ETX || data[i] == ESCAPE) {
-            // Se for um código especial, envie ESCAPE + valor + 0x20
-            send_buffer[idx++] = ESCAPE;
-            send_buffer[idx++] = data[i] + 0x20;
-        } else {
-            // Caso contrário, envie o valor normal
-            send_buffer[idx++] = data[i];
-        }
-    }
-
-    send_buffer[idx++] = ETX;  // Fim do pacote (ETX)
-
-    // Envia os dados via UART
-    HAL_UART_Transmit(huart, send_buffer, idx, HAL_MAX_DELAY);
-}
-
-// Função para receber pacotes com tratamento de ESCAPE CODE
-void UART_ReceivePacket(UART_HandleTypeDef *huart, uint8_t *recv_buffer, uint16_t *recv_len) {
-    uint8_t byte;
-    uint16_t idx = 0;
-    HAL_StatusTypeDef status;
-
-    *recv_len = 0;
-    while (1) {
-        // Recebe um byte via UART
-        status = HAL_UART_Receive(huart, &byte, 1, HAL_MAX_DELAY);
-        if (status == HAL_OK) {
-            if (byte == ESCAPE) {
-                // Se o byte for ESCAPE, o próximo byte é um valor especial
-                HAL_UART_Receive(huart, &byte, 1, HAL_MAX_DELAY);
-                recv_buffer[idx++] = byte - 0x20;  // Subtrai 0x20 para restaurar o valor original
-            } else {
-                recv_buffer[idx++] = byte;
-            }
-
-            // Verifica se recebeu o ETX (fim do pacote)
-            if (recv_buffer[idx - 1] == ETX) {
-                *recv_len = idx;
-                break;
-            }
-        }
-    }
-}
-
-// Função para preparar a resposta com base no OPCODE recebido
-void PrepareResponse(uint8_t opcode, uint8_t *response_data, uint16_t *response_len) {
-    switch (opcode) {
-        case 0x10:  // Exemplo de OPCODE 1
-            response_data[0] = 0x10;  // Resposta para o OPCODE 1
-            response_data[1] = 0x20;
-            *response_len = 2;
-            break;
-        default:
-            response_data[0] = 0xFF;
-            *response_len = 1;
-            break;
-    }
-}
 
 
 
@@ -707,27 +1365,27 @@ void PrepareResponse(uint8_t opcode, uint8_t *response_data, uint16_t *response_
 void StartUartTask(void *argument)
 {
   /* USER CODE BEGIN 5 */
-	uint8_t packet[256];
-    uint16_t recv_len;
+	uint8_t receivedByte;
+	uint8_t txByte;
+
 
   /* Infinite loop */
   while(1)
   {
 
-	if (xQueueReceive(uartQueue, packet, portMAX_DELAY) == pdTRUE) {
-
-		if (packet[0] == STX && packet[recv_len - 1] == ETX) {
-			uint8_t opcode = packet[2];
-			uint8_t response_buffer[256];
-			uint16_t response_len;
-
-			// Prepara a resposta com base no OPCODE
-			PrepareResponse(opcode, response_buffer, &response_len);
-
-			// Envia o pacote de resposta
-			HAL_UART_Transmit_IT(&huart4, response_buffer, response_len);
-		}
+	// Se houver dados recebidos na fila
+	if (xQueueReceive(rxuartqueueHandle, &receivedByte, portMAX_DELAY)) {
+		// Processa o byte recebido
+		UartMainProcess(receivedByte);
 	}
+
+	// Se houver dados na fila de transmissão, envia-os
+	if (xQueueReceive(txuartqueueHandle, &txByte, portMAX_DELAY)) {
+		// Envia o byte pela UART
+		HAL_UART_Transmit_IT(&huart4, &txByte, 1);
+		xSemaphoreTake(uartBinSemaHandle, portMAX_DELAY);
+	}
+
   }
   /* USER CODE END 5 */
 }
