@@ -69,17 +69,17 @@
 
 typedef enum UART_OPCODES
 {
-    // Busca de dados e informações 0x10 a 0x1F
-    UO_KEEPALIVE                        = 0x10,
-	UO_GETSOMETHING						= 0x11,
+	// Busca de dados e informações 0x10 a 0x1F
+	UO_KEEPALIVE		= 0x10,
+	UO_GETSOMETHING		= 0x11,
 
 
-    // Ações de configuração e ajustes 0x20 a 0x3F
-	UO_SETCONFIG						= 0x20,
+	// Ações de configuração e ajustes 0x20 a 0x3F
+	UO_SETCONFIG		= 0x20,
 
-    // Operação ou outro 0x40 a 0x5F
+	// Operação ou outro 0x40 a 0x5F
 
-    UO_NUM_OF
+	UO_NUM_OF
 
 }UART_OPCODES;
 
@@ -112,8 +112,8 @@ typedef enum UART_OPCODES
 
 #define RESPONSE_OPCODE_MASK 0x80
 
-#define MAX_PACKAGE_LEN 5 //TODO: change it
-
+#define MAX_DATA_LEN 	122
+#define MAX_PACKAGE_LEN 128
 /* USER CODE END PM */
 
 /* Private variables ---------------------------------------------------------*/
@@ -123,7 +123,7 @@ DMA_HandleTypeDef hdma_adc1;
 
 TIM_HandleTypeDef htim1;
 
-UART_HandleTypeDef huart2;
+UART_HandleTypeDef huart4;
 
 /* Definitions for uartTask */
 osThreadId_t uartTaskHandle;
@@ -167,13 +167,11 @@ typedef struct UART_PACKAGE_PROTOCOL
   unsigned char uc_DeviceAddress;
   unsigned char uc_OpCode;
   unsigned char uc_Datalen;
-  unsigned char uc_Data[MAX_PACKAGE_LEN];
+  unsigned char uc_Data[MAX_DATA_LEN];
   unsigned char uc_Checksum;
   unsigned char uc_Etx;
 }UART_PACKAGE_PROTOCOL;
 
-
-uint8_t rx_buffer;
 
 
 uint32_t 	adcBuffer[F_BUFFER_SIZE];
@@ -190,7 +188,6 @@ float pot_ativa = 0.0;
 float pf = 0.0;
 
 
-
 UART_MACHINE_STATES m_udtUartmachineStates;
 UART_PACKAGE_PARTS  m_udtUartPackageParts;
 UART_PACKAGE_PROTOCOL m_udtReceptionPackage;
@@ -199,6 +196,9 @@ UART_PACKAGE_PROTOCOL m_udtTransmitionPackage;
 // Dado que está sendo processado no pacote
 unsigned char m_ucCorrentDataPos;
 
+// Dado que está sendo processado no Buffer de Transmissao
+unsigned char m_ucTXBufferCorrentDataPos = 0;
+
 // CheckSum Calculado
 unsigned char m_ucCalculatedChecksum;
 
@@ -206,7 +206,10 @@ unsigned char m_ucCalculatedChecksum;
 uint8_t m_blnProcessingScapeChar;
 
 // Indica que está na hora de responder
-uint8_t m_blnAnswering = 0;
+uint8_t m_blnReply = 0;
+
+uint8_t rx_buffer;
+uint8_t tx_buffer[MAX_PACKAGE_LEN];
 
 
 /* USER CODE END PV */
@@ -219,7 +222,7 @@ static void MX_DMA_Init(void);
 static void MX_ADC1_Init(void);
 static void MX_TIM1_Init(void);
 static void MX_ADC2_Init(void);
-static void MX_USART2_UART_Init(void);
+static void MX_UART4_Init(void);
 void StartUartTask(void *argument);
 void StartAdcTask(void *argument);
 
@@ -303,7 +306,7 @@ int main(void)
   MX_ADC1_Init();
   MX_TIM1_Init();
   MX_ADC2_Init();
-  MX_USART2_UART_Init();
+  MX_UART4_Init();
   /* USER CODE BEGIN 2 */
 
 
@@ -621,37 +624,37 @@ static void MX_TIM1_Init(void)
 }
 
 /**
-  * @brief USART2 Initialization Function
+  * @brief UART4 Initialization Function
   * @param None
   * @retval None
   */
-static void MX_USART2_UART_Init(void)
+static void MX_UART4_Init(void)
 {
 
-  /* USER CODE BEGIN USART2_Init 0 */
+  /* USER CODE BEGIN UART4_Init 0 */
 
-  /* USER CODE END USART2_Init 0 */
+  /* USER CODE END UART4_Init 0 */
 
-  /* USER CODE BEGIN USART2_Init 1 */
+  /* USER CODE BEGIN UART4_Init 1 */
 
-  /* USER CODE END USART2_Init 1 */
-  huart2.Instance = USART2;
-  huart2.Init.BaudRate = 115200;
-  huart2.Init.WordLength = UART_WORDLENGTH_8B;
-  huart2.Init.StopBits = UART_STOPBITS_1;
-  huart2.Init.Parity = UART_PARITY_NONE;
-  huart2.Init.Mode = UART_MODE_TX_RX;
-  huart2.Init.HwFlowCtl = UART_HWCONTROL_NONE;
-  huart2.Init.OverSampling = UART_OVERSAMPLING_16;
-  huart2.Init.OneBitSampling = UART_ONE_BIT_SAMPLE_DISABLE;
-  huart2.AdvancedInit.AdvFeatureInit = UART_ADVFEATURE_NO_INIT;
-  if (HAL_UART_Init(&huart2) != HAL_OK)
+  /* USER CODE END UART4_Init 1 */
+  huart4.Instance = UART4;
+  huart4.Init.BaudRate = 115200;
+  huart4.Init.WordLength = UART_WORDLENGTH_8B;
+  huart4.Init.StopBits = UART_STOPBITS_1;
+  huart4.Init.Parity = UART_PARITY_NONE;
+  huart4.Init.Mode = UART_MODE_TX_RX;
+  huart4.Init.HwFlowCtl = UART_HWCONTROL_NONE;
+  huart4.Init.OverSampling = UART_OVERSAMPLING_16;
+  huart4.Init.OneBitSampling = UART_ONE_BIT_SAMPLE_DISABLE;
+  huart4.AdvancedInit.AdvFeatureInit = UART_ADVFEATURE_NO_INIT;
+  if (HAL_UART_Init(&huart4) != HAL_OK)
   {
     Error_Handler();
   }
-  /* USER CODE BEGIN USART2_Init 2 */
-  HAL_UART_Receive_IT(&huart2, (uint8_t *)&rx_buffer, 1);
-  /* USER CODE END USART2_Init 2 */
+  /* USER CODE BEGIN UART4_Init 2 */
+
+  /* USER CODE END UART4_Init 2 */
 
 }
 
@@ -737,6 +740,7 @@ void ResetSerial()
 
   // Inicializa o Checksum calculado com 0
   m_ucCalculatedChecksum = 0;
+
 }
 
 
@@ -871,7 +875,7 @@ void UartMainProcess(unsigned char ucData)
         case UPP_DATA_LEN:
         {
           // Verifica se o dado recebido é o correto.
-          if( ucData >= MAX_PACKAGE_LEN )
+          if( ucData >= MAX_DATA_LEN )
           {
               // OpCode inválido.
               //////////////////
@@ -1172,8 +1176,10 @@ void UartMainProcess(unsigned char ucData)
           // Escreve
           if(SendData(m_udtTransmitionPackage.uc_Etx, 1) == 1)
           {
-            // Vai aguardar o próximo pacote
-            ResetSerial();
+        	 //Indica para a task que pode enviar a resposta
+        	 m_blnReply = 1;
+
+        	 ResetSerial();
           }
         }
         break;
@@ -1254,9 +1260,8 @@ uint8_t SendData(unsigned char ucDataTosend, uint8_t blnIsSpecialChar)
     }
   }
 
-  // TODO Escreve - envia pra queue de resposta
-
-  xQueueSend(txuartqueueHandle, &ucDataTosend, portMAX_DELAY);
+  tx_buffer[m_ucTXBufferCorrentDataPos] = ucDataTosend;
+  m_ucTXBufferCorrentDataPos++;
 
   //Serial2.write(ucDataTosend);
 
@@ -1314,7 +1319,7 @@ void HAL_UART_RxCpltCallback(UART_HandleTypeDef *huart)
 
 	xQueueSendFromISR(rxuartqueueHandle, &rx_buffer, &pxHigherPriorityTaskWoken);
 
-	HAL_UART_Receive_IT(&huart2, (uint8_t *)&rx_buffer, 1);
+	HAL_UART_Receive_IT(&huart4, (uint8_t *)&rx_buffer, 1);
 
 	portYIELD_FROM_ISR(pxHigherPriorityTaskWoken);
 }
@@ -1323,6 +1328,13 @@ void HAL_UART_RxCpltCallback(UART_HandleTypeDef *huart)
 void HAL_UART_TxCpltCallback(UART_HandleTypeDef *huart)
 {
 	portBASE_TYPE pxHigherPriorityTaskWoken = pdFALSE;
+
+	for(uint8_t i=0; i < m_ucTXBufferCorrentDataPos; i++)
+	{
+		tx_buffer[i] = 0x00;
+	}
+
+	m_ucTXBufferCorrentDataPos = 0;
 
 	xSemaphoreGiveFromISR(uartBinSemaHandle, &pxHigherPriorityTaskWoken);
 
@@ -1366,35 +1378,37 @@ void StartUartTask(void *argument)
 {
   /* USER CODE BEGIN 5 */
 	uint8_t receivedByte;
-	uint8_t txByte;
 	uint8_t null = 0;
 
-	//HAL_UART_Receive_IT(&huart2, (uint8_t *)&rx_buffer, 1);
-
+	HAL_UART_Receive_IT(&huart4, (uint8_t *)&rx_buffer, 1);
 
   /* Infinite loop */
   while(1)
   {
-	  if((m_udtUartmachineStates == UMS_RECEIVING)){
-		// Se houver dados recebidos na fila
-		if (xQueueReceive(rxuartqueueHandle, &receivedByte, portMAX_DELAY)) {
-			// Processa o byte recebido
-			UartMainProcess(receivedByte);
-		}
-  	  }
-	  else if ((m_udtUartmachineStates == UMS_PROCESSING_RESPONSE_PACKAGE))
+	  if(m_blnReply == 0)
 	  {
-		  UartMainProcess(null);
+		  if((m_udtUartmachineStates == UMS_RECEIVING)){
+			// Se houver dados recebidos na fila
+			if (xQueueReceive(rxuartqueueHandle, &receivedByte, portMAX_DELAY)) {
+				// Processa o byte recebido
+				UartMainProcess(receivedByte);
+			}
+		  }
+		  else if ((m_udtUartmachineStates == UMS_PROCESSING_RESPONSE_PACKAGE))
+		  {
+			  UartMainProcess(null);
+		  }
+		  else if ((m_udtUartmachineStates == UMS_SENDING_RESPONSE))
+		  {
+			UartMainProcess(null);
+		  }
 	  }
-	  else if ((m_udtUartmachineStates == UMS_SENDING_RESPONSE))
+	  else
 	  {
-		  UartMainProcess(null);
-		// Se houver dados na fila de transmissão, envia-os
-		if (xQueueReceive(txuartqueueHandle, &txByte, portMAX_DELAY)) {
-			// Envia o byte pela UART
-			HAL_UART_Transmit_IT(&huart2, &txByte, 1);
-			xSemaphoreTake(uartBinSemaHandle, portMAX_DELAY);
-		}
+		  HAL_UART_Transmit_IT(&huart4, (uint8_t *)&tx_buffer, m_ucTXBufferCorrentDataPos);
+		  xSemaphoreTake(uartBinSemaHandle, portMAX_DELAY);
+
+		  m_blnReply = 0;
 	  }
 
   }
