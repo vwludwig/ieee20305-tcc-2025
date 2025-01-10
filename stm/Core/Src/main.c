@@ -137,7 +137,7 @@ osThreadId_t adcTaskHandle;
 const osThreadAttr_t adcTask_attributes = {
   .name = "adcTask",
   .stack_size = 256 * 4,
-  .priority = (osPriority_t) osPriorityNormal,
+  .priority = (osPriority_t) osPriorityAboveNormal,
 };
 /* Definitions for adchalfselectQueue */
 osMessageQueueId_t adchalfselectQueueHandle;
@@ -148,11 +148,6 @@ const osMessageQueueAttr_t adchalfselectQueue_attributes = {
 osMessageQueueId_t rxuartqueueHandle;
 const osMessageQueueAttr_t rxuartqueue_attributes = {
   .name = "rxuartqueue"
-};
-/* Definitions for txuartqueue */
-osMessageQueueId_t txuartqueueHandle;
-const osMessageQueueAttr_t txuartqueue_attributes = {
-  .name = "txuartqueue"
 };
 /* Definitions for uartBinSema */
 osSemaphoreId_t uartBinSemaHandle;
@@ -175,8 +170,8 @@ typedef struct UART_PACKAGE_PROTOCOL
 
 
 uint32_t 	adcBuffer[F_BUFFER_SIZE];
-float 		adc1_voltage[H_BUFFER_SIZE];
-float 		adc2_current[H_BUFFER_SIZE];
+float	 	adc1_voltage[H_BUFFER_SIZE];
+float	 	adc2_current[H_BUFFER_SIZE];
 
 float cc_voltage = 0.0;
 float rms_voltage = 0.0;
@@ -338,9 +333,6 @@ int main(void)
 
   /* creation of rxuartqueue */
   rxuartqueueHandle = osMessageQueueNew (128, sizeof(uint8_t), &rxuartqueue_attributes);
-
-  /* creation of txuartqueue */
-  txuartqueueHandle = osMessageQueueNew (128, sizeof(uint8_t), &txuartqueue_attributes);
 
   /* USER CODE BEGIN RTOS_QUEUES */
   /* add queues, ... */
@@ -1070,7 +1062,7 @@ void UartMainProcess(unsigned char ucData)
     break;
     case UMS_SENDING_RESPONSE:
     {
-      // TODO Aqui poderia verificar se a serial está disponivel para responder
+      //Aqui poderia verificar se a serial está disponivel para responder
 //      if( Serial2.availableForWrite() == 0 )
 //      {
 //        // Não pode transmitir.
@@ -1425,25 +1417,29 @@ void StartUartTask(void *argument)
 void StartAdcTask(void *argument)
 {
   /* USER CODE BEGIN StartAdcTask */
-
+	//TODO
 	uint8_t sidebuffer_choice = 0;
 	uint16_t i = 0;
 
 	HAL_ADCEx_MultiModeStart_DMA(&hadc1, (uint32_t*)adcBuffer, F_BUFFER_SIZE);
 	HAL_TIM_Base_Start(&htim1);
 
-	cc_voltage = 0.0;
-	cc_current = 0.0;
-	rms_voltage = 0.0;
-	rms_current = 0.0;
-	pot_ativa = 0.0;
-	pot_aparente = 0.0;
-	pot_reativa = 0.0;
-	pf = 0.0;
+
   /* Infinite loop */
   while(1)
   {
 		xQueueReceive(adchalfselectQueueHandle, &sidebuffer_choice, portMAX_DELAY);
+
+		pot_ativa = 0.0;
+		pot_aparente = 0.0;
+		pot_reativa = 0.0;
+
+		cc_voltage = 0.0;
+		cc_current = 0.0;
+		rms_voltage = 0.0;
+		rms_current = 0.0;
+
+		pf = 0.0;
 
 		if (sidebuffer_choice == 1){
 			i = 0;
@@ -1473,11 +1469,19 @@ void StartAdcTask(void *argument)
 				pot_ativa += ((adc2_current[c] - cc_current) * (adc1_voltage[c] - cc_voltage));
 		}
 
+		pot_ativa = pot_ativa / H_BUFFER_SIZE;
+
 		rms_voltage = sqrtf(rms_voltage/H_BUFFER_SIZE);
 		rms_current = sqrtf(rms_current/H_BUFFER_SIZE);
 
 		pot_aparente = (rms_voltage * rms_current);
-		pot_reativa = (pot_aparente * pot_aparente)-(pot_ativa * pot_ativa);
+		pot_reativa = ((pot_aparente * pot_aparente) / 10)-((pot_ativa * pot_ativa) / 10);
+
+		if(pot_reativa > 0)
+	    {
+			pot_reativa = sqrtf(pot_reativa);
+		}
+
 		pf = pot_ativa/pot_aparente;
 
   }
