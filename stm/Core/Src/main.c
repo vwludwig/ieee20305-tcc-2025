@@ -71,7 +71,7 @@ typedef enum UART_OPCODES
 {
 	// Busca de dados e informações 0x10 a 0x1F
 	UO_KEEPALIVE		= 0x10,
-	UO_GETSOMETHING		= 0x11,
+	UO_GET_DATA 		= 0x11,
 
 
 	// Ações de configuração e ajustes 0x20 a 0x3F
@@ -170,17 +170,20 @@ typedef struct UART_PACKAGE_PROTOCOL
 
 
 uint32_t 	adcBuffer[F_BUFFER_SIZE];
-float	 	adc1_voltage[H_BUFFER_SIZE];
-float	 	adc2_current[H_BUFFER_SIZE];
+uint16_t 	adc1_voltage[H_BUFFER_SIZE];
+uint16_t 	adc2_current[H_BUFFER_SIZE];
 
-float cc_voltage = 0.0;
-float rms_voltage = 0.0;
-float cc_current = 0.0;
-float rms_current = 0.0;
-float pot_aparente = 0.0;
-float pot_reativa = 0.0;
-float pot_ativa = 0.0;
-float pf = 0.0;
+
+uint32_t cc_voltage = 0;
+uint32_t cc_current = 0;
+
+int32_t rms_current = 0;
+int32_t rms_voltage = 0;
+
+uint32_t pot_aparente = 0;
+uint32_t pot_reativa = 0;
+int32_t  pot_ativa = 0;
+uint16_t pf = 0;
 
 
 UART_MACHINE_STATES m_udtUartmachineStates;
@@ -279,7 +282,8 @@ int main(void)
   /* MCU Configuration--------------------------------------------------------*/
 
   /* Reset of all peripherals, Initializes the Flash interface and the Systick. */
-  HAL_Init();
+
+	HAL_Init();
 
   /* USER CODE BEGIN Init */
 
@@ -968,17 +972,36 @@ void UartMainProcess(unsigned char ucData)
 
          }
          break;
-         case UO_GETSOMETHING:
+         case UO_GET_DATA:
                  {
-
+                	 //TODO: Montar pacote de resposta dos dados
                      // Prepara o pacote de resposta
-                     m_udtTransmitionPackage.uc_Datalen = 0x04;
+                     m_udtTransmitionPackage.uc_Datalen = 0x12;
 
 
-                     m_udtTransmitionPackage.uc_Data[0] = (uint8_t)(0x00);
-                     m_udtTransmitionPackage.uc_Data[1] = (uint8_t)(0x00);
-                     m_udtTransmitionPackage.uc_Data[2] = (uint8_t)(0x00);
-                     m_udtTransmitionPackage.uc_Data[3] = (uint8_t)(0x00);
+                     m_udtTransmitionPackage.uc_Data[0] = (uint8_t)((rms_voltage & 0x0000FF00) >> 8);
+                     m_udtTransmitionPackage.uc_Data[1] = (uint8_t)((rms_voltage & 0x000000FF));
+
+                     m_udtTransmitionPackage.uc_Data[2] = (uint8_t)((rms_current & 0x0000FF00) >> 8);
+					 m_udtTransmitionPackage.uc_Data[3] = (uint8_t)((rms_current & 0x000000FF));
+
+					 m_udtTransmitionPackage.uc_Data[4] = (uint8_t)((pf & 0xFF00) >> 8);
+					 m_udtTransmitionPackage.uc_Data[5] = (uint8_t)((pf & 0x00FF));
+
+					 m_udtTransmitionPackage.uc_Data[6] = (uint8_t)((pot_aparente & 0xFF000000) >> 24);
+				     m_udtTransmitionPackage.uc_Data[7] = (uint8_t)((pot_aparente & 0x00FF0000) >> 16);
+				     m_udtTransmitionPackage.uc_Data[8] = (uint8_t)((pot_aparente & 0x0000FF00) >> 8);
+					 m_udtTransmitionPackage.uc_Data[9] = (uint8_t)((pot_aparente & 0x000000FF));
+
+					 m_udtTransmitionPackage.uc_Data[10] = (uint8_t)((pot_ativa & 0xFF000000) >> 24);
+					 m_udtTransmitionPackage.uc_Data[11] = (uint8_t)((pot_ativa & 0x00FF0000) >> 16);
+					 m_udtTransmitionPackage.uc_Data[12] = (uint8_t)((pot_ativa & 0x0000FF00) >> 8);
+					 m_udtTransmitionPackage.uc_Data[13] = (uint8_t)((pot_ativa & 0x000000FF));
+
+					 m_udtTransmitionPackage.uc_Data[14] = (uint8_t)((pot_reativa & 0xFF000000) >> 24);
+					 m_udtTransmitionPackage.uc_Data[15] = (uint8_t)((pot_reativa & 0x00FF0000) >> 16);
+					 m_udtTransmitionPackage.uc_Data[16] = (uint8_t)((pot_reativa & 0x0000FF00) >> 8);
+					 m_udtTransmitionPackage.uc_Data[17] = (uint8_t)((pot_reativa & 0x000000FF));
 
                  }
                  break;
@@ -1430,16 +1453,16 @@ void StartAdcTask(void *argument)
   {
 		xQueueReceive(adchalfselectQueueHandle, &sidebuffer_choice, portMAX_DELAY);
 
-		pot_ativa = 0.0;
-		pot_aparente = 0.0;
-		pot_reativa = 0.0;
+		pot_ativa = 0;
+		pot_aparente = 0;
+		pot_reativa = 0;
 
-		cc_voltage = 0.0;
-		cc_current = 0.0;
-		rms_voltage = 0.0;
-		rms_current = 0.0;
+		cc_voltage = 0;
+		cc_current = 0;
+		rms_voltage = 0;
+		rms_current = 0;
 
-		pf = 0.0;
+		pf = 0;
 
 		if (sidebuffer_choice == 1){
 			i = 0;
@@ -1450,12 +1473,12 @@ void StartAdcTask(void *argument)
 
 		for(uint16_t c = i; c < H_BUFFER_SIZE; c++){
 				// Extrai os 16 bits menos significativos
-				adc1_voltage[c] = (((uint16_t)(adcBuffer[c] & 0x0000FFFF)) * V1_SENSOR_MULT * V1_REAL_MULT);
+				adc1_voltage[c] = (((uint32_t)(adcBuffer[c] & 0x0000FFFF)) * V1_SENSOR_MULT * V1_REAL_MULT);
 
 				cc_voltage += adc1_voltage[c];
 
 				// Extrai os 16 bits mais significativos
-				adc2_current[c] = (((uint16_t)((adcBuffer[c] >> 16) & 0x0000FFFF)) * C2_SENSOR_MULT * C2_REAL_MULT);
+				adc2_current[c] = (((uint32_t)((adcBuffer[c] >> 16) & 0x0000FFFF)) * C2_SENSOR_MULT * C2_REAL_MULT);
 
 				cc_current += adc2_current[c];
 		}
@@ -1464,26 +1487,42 @@ void StartAdcTask(void *argument)
 		cc_current /= H_BUFFER_SIZE;
 
 		for(uint16_t c = i; c < H_BUFFER_SIZE; c++){
-				rms_voltage += (adc1_voltage[c] - cc_voltage) * (adc1_voltage[c] - cc_voltage);
-				rms_current += (adc2_current[c] - cc_current) * (adc2_current[c] - cc_current);
-				pot_ativa += ((adc2_current[c] - cc_current) * (adc1_voltage[c] - cc_voltage));
+				rms_voltage += (int32_t)((adc1_voltage[c] - cc_voltage) * (adc1_voltage[c] - cc_voltage));
+				rms_current += (int32_t)((adc2_current[c] - cc_current) * (adc2_current[c] - cc_current));
+				pot_ativa += (int32_t)((adc2_current[c] - cc_current) * (adc1_voltage[c] - cc_voltage));
 		}
 
-		pot_ativa = pot_ativa / H_BUFFER_SIZE;
+		pot_ativa = (pot_ativa / H_BUFFER_SIZE)*100;
 
-		rms_voltage = sqrtf(rms_voltage/H_BUFFER_SIZE);
-		rms_current = sqrtf(rms_current/H_BUFFER_SIZE);
+		rms_voltage = (sqrtf((uint32_t)(rms_voltage/H_BUFFER_SIZE)))*10;
+		rms_current = (sqrtf((uint32_t)(rms_current/H_BUFFER_SIZE)))*100;
 
-		pot_aparente = (rms_voltage * rms_current);
-		pot_reativa = ((pot_aparente * pot_aparente) / 10)-((pot_ativa * pot_ativa) / 10);
+		if ((rms_voltage * rms_current) > 0)
+	    {
+			pot_aparente = (uint32_t)((rms_voltage * rms_current))/10;
+	    }
+
+		if ((pot_aparente > 0) && (pot_ativa > 0))
+		{
+			pot_ativa = pot_ativa/10;
+			pot_aparente = pot_aparente/10;
+
+			if ((pot_aparente > 0) && (pot_ativa > 0))
+			{
+				pot_reativa = ((pot_aparente * pot_aparente) / 10)-((pot_ativa * pot_ativa) / 10);
+			}
+
+		}
 
 		if(pot_reativa > 0)
 	    {
-			pot_reativa = sqrtf(pot_reativa);
+			pot_reativa = sqrtf((uint32_t)pot_reativa);
 		}
 
-		pf = pot_ativa/pot_aparente;
-
+		if ((pot_ativa > 0) && (pot_aparente > 0))
+	    {
+			pf = (pot_ativa*1000)/pot_aparente;
+	    }
   }
   /* USER CODE END StartAdcTask */
 }
