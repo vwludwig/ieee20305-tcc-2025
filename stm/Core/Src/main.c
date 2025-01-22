@@ -183,14 +183,13 @@ typedef struct ENERGY_DATA
 	uint64_t consumption;
 }ENERGY_DATA;
 
-int32_t rms_current1 = 0;
-int32_t rms_voltage1 = 0;
-uint32_t pot_aparente1 = 0;
-uint32_t pot_reativa1 = 0;
-int32_t  pot_ativa1 = 0;
-uint16_t pf1 = 0;
-uint64_t consumption1 = 0;
-
+ int32_t pot_ativa1 = 0;
+ uint32_t pot_aparente1 = 0;
+ uint32_t pot_reativa1 = 0;
+ int32_t rms_voltage1 = 0;
+ int32_t rms_current1 = 0;
+ uint16_t pf1 = 0;
+ uint64_t consumption1 = 0;
 
 uint32_t 	adcBuffer[F_BUFFER_SIZE];
 uint16_t 	adc1_voltage[H_BUFFER_SIZE];
@@ -985,47 +984,46 @@ void UartMainProcess(unsigned char ucData)
          break;
          case UO_GET_DATA:
                  {
-                	 ENERGY_DATA m_udtEnergyDataPacket;
-                   	 //TODO: Receber dados da Queue
+					ENERGY_DATA m_udtEnergyDataPacket;
 
-                	 xQueueReceive(energyqueueHandle, &m_udtEnergyDataPacket, portMAX_DELAY);
+					xQueueReceive(energyqueueHandle, &m_udtEnergyDataPacket, portMAX_DELAY);
 
-                	 // Prepara o pacote de resposta
-                     m_udtTransmitionPackage.uc_Datalen = 0x1A;
+					// Prepara o pacote de resposta
+					m_udtTransmitionPackage.uc_Datalen = 0x1A;
 
 
-                     m_udtTransmitionPackage.uc_Data[0] = (uint8_t)((m_udtEnergyDataPacket.rms_voltage & 0x0000FF00) >> 8);
-                     m_udtTransmitionPackage.uc_Data[1] = (uint8_t)((m_udtEnergyDataPacket.rms_voltage & 0x000000FF));
+					m_udtTransmitionPackage.uc_Data[0] = (uint8_t)((m_udtEnergyDataPacket.rms_voltage & 0x0000FF00) >> 8);
+					m_udtTransmitionPackage.uc_Data[1] = (uint8_t)((m_udtEnergyDataPacket.rms_voltage & 0x000000FF));
 
-                     m_udtTransmitionPackage.uc_Data[2] = (uint8_t)((m_udtEnergyDataPacket.rms_current & 0x0000FF00) >> 8);
-					 m_udtTransmitionPackage.uc_Data[3] = (uint8_t)((m_udtEnergyDataPacket.rms_current & 0x000000FF));
+					m_udtTransmitionPackage.uc_Data[2] = (uint8_t)((m_udtEnergyDataPacket.rms_current & 0x0000FF00) >> 8);
+					m_udtTransmitionPackage.uc_Data[3] = (uint8_t)((m_udtEnergyDataPacket.rms_current & 0x000000FF));
 
-					 m_udtTransmitionPackage.uc_Data[4] = (uint8_t)((m_udtEnergyDataPacket.pf & 0xFF00) >> 8);
-					 m_udtTransmitionPackage.uc_Data[5] = (uint8_t)((m_udtEnergyDataPacket.pf & 0x00FF));
+					m_udtTransmitionPackage.uc_Data[4] = (uint8_t)((m_udtEnergyDataPacket.pf & 0xFF00) >> 8);
+					m_udtTransmitionPackage.uc_Data[5] = (uint8_t)((m_udtEnergyDataPacket.pf & 0x00FF));
 
-					 m_udtTransmitionPackage.uc_Data[6] = (uint8_t)((m_udtEnergyDataPacket.pot_aparente & 0xFF000000) >> 24);
-				     m_udtTransmitionPackage.uc_Data[7] = (uint8_t)((m_udtEnergyDataPacket.pot_aparente & 0x00FF0000) >> 16);
-				     m_udtTransmitionPackage.uc_Data[8] = (uint8_t)((m_udtEnergyDataPacket.pot_aparente & 0x0000FF00) >> 8);
-					 m_udtTransmitionPackage.uc_Data[9] = (uint8_t)((m_udtEnergyDataPacket.pot_aparente & 0x000000FF));
+					m_udtTransmitionPackage.uc_Data[6] = (uint8_t)((m_udtEnergyDataPacket.pot_aparente & 0xFF000000) >> 24);
+					m_udtTransmitionPackage.uc_Data[7] = (uint8_t)((m_udtEnergyDataPacket.pot_aparente & 0x00FF0000) >> 16);
+					m_udtTransmitionPackage.uc_Data[8] = (uint8_t)((m_udtEnergyDataPacket.pot_aparente & 0x0000FF00) >> 8);
+					m_udtTransmitionPackage.uc_Data[9] = (uint8_t)((m_udtEnergyDataPacket.pot_aparente & 0x000000FF));
 
-					 m_udtTransmitionPackage.uc_Data[10] = (uint8_t)((m_udtEnergyDataPacket.pot_ativa & 0xFF000000) >> 24);
-					 m_udtTransmitionPackage.uc_Data[11] = (uint8_t)((m_udtEnergyDataPacket.pot_ativa & 0x00FF0000) >> 16);
-					 m_udtTransmitionPackage.uc_Data[12] = (uint8_t)((m_udtEnergyDataPacket.pot_ativa & 0x0000FF00) >> 8);
-					 m_udtTransmitionPackage.uc_Data[13] = (uint8_t)((m_udtEnergyDataPacket.pot_ativa & 0x000000FF));
+					m_udtTransmitionPackage.uc_Data[10] = (uint8_t)((m_udtEnergyDataPacket.pot_ativa & 0xFF000000) >> 24);
+					m_udtTransmitionPackage.uc_Data[11] = (uint8_t)((m_udtEnergyDataPacket.pot_ativa & 0x00FF0000) >> 16);
+					m_udtTransmitionPackage.uc_Data[12] = (uint8_t)((m_udtEnergyDataPacket.pot_ativa & 0x0000FF00) >> 8);
+					m_udtTransmitionPackage.uc_Data[13] = (uint8_t)((m_udtEnergyDataPacket.pot_ativa & 0x000000FF));
 
-					 m_udtTransmitionPackage.uc_Data[14] = (uint8_t)((m_udtEnergyDataPacket.pot_reativa & 0xFF000000) >> 24);
-					 m_udtTransmitionPackage.uc_Data[15] = (uint8_t)((m_udtEnergyDataPacket.pot_reativa & 0x00FF0000) >> 16);
-					 m_udtTransmitionPackage.uc_Data[16] = (uint8_t)((m_udtEnergyDataPacket.pot_reativa & 0x0000FF00) >> 8);
-					 m_udtTransmitionPackage.uc_Data[17] = (uint8_t)((m_udtEnergyDataPacket.pot_reativa & 0x000000FF));
+					m_udtTransmitionPackage.uc_Data[14] = (uint8_t)((m_udtEnergyDataPacket.pot_reativa & 0xFF000000) >> 24);
+					m_udtTransmitionPackage.uc_Data[15] = (uint8_t)((m_udtEnergyDataPacket.pot_reativa & 0x00FF0000) >> 16);
+					m_udtTransmitionPackage.uc_Data[16] = (uint8_t)((m_udtEnergyDataPacket.pot_reativa & 0x0000FF00) >> 8);
+					m_udtTransmitionPackage.uc_Data[17] = (uint8_t)((m_udtEnergyDataPacket.pot_reativa & 0x000000FF));
 
-					 m_udtTransmitionPackage.uc_Data[18] = (uint8_t)((m_udtEnergyDataPacket.consumption & 0xFF00000000000000) >> 56);
-					 m_udtTransmitionPackage.uc_Data[19] = (uint8_t)((m_udtEnergyDataPacket.consumption & 0x00FF000000000000) >> 48);
-					 m_udtTransmitionPackage.uc_Data[20] = (uint8_t)((m_udtEnergyDataPacket.consumption & 0x0000FF0000000000) >> 40);
-					 m_udtTransmitionPackage.uc_Data[21] = (uint8_t)((m_udtEnergyDataPacket.consumption & 0x000000FF00000000) >> 32);
-					 m_udtTransmitionPackage.uc_Data[22] = (uint8_t)((m_udtEnergyDataPacket.consumption & 0x00000000FF000000) >> 24);
-					 m_udtTransmitionPackage.uc_Data[23] = (uint8_t)((m_udtEnergyDataPacket.consumption & 0x0000000000FF0000) >> 16);
-					 m_udtTransmitionPackage.uc_Data[24] = (uint8_t)((m_udtEnergyDataPacket.consumption & 0x000000000000FF00) >> 8);
-					 m_udtTransmitionPackage.uc_Data[25] = (uint8_t)((m_udtEnergyDataPacket.consumption & 0x00000000000000FF));
+					m_udtTransmitionPackage.uc_Data[18] = (uint8_t)((m_udtEnergyDataPacket.consumption & 0xFF00000000000000) >> 56);
+					m_udtTransmitionPackage.uc_Data[19] = (uint8_t)((m_udtEnergyDataPacket.consumption & 0x00FF000000000000) >> 48);
+					m_udtTransmitionPackage.uc_Data[20] = (uint8_t)((m_udtEnergyDataPacket.consumption & 0x0000FF0000000000) >> 40);
+					m_udtTransmitionPackage.uc_Data[21] = (uint8_t)((m_udtEnergyDataPacket.consumption & 0x000000FF00000000) >> 32);
+					m_udtTransmitionPackage.uc_Data[22] = (uint8_t)((m_udtEnergyDataPacket.consumption & 0x00000000FF000000) >> 24);
+					m_udtTransmitionPackage.uc_Data[23] = (uint8_t)((m_udtEnergyDataPacket.consumption & 0x0000000000FF0000) >> 16);
+					m_udtTransmitionPackage.uc_Data[24] = (uint8_t)((m_udtEnergyDataPacket.consumption & 0x000000000000FF00) >> 8);
+					m_udtTransmitionPackage.uc_Data[25] = (uint8_t)((m_udtEnergyDataPacket.consumption & 0x00000000000000FF));
 
                  }
                  break;
@@ -1471,6 +1469,7 @@ void StartAdcTask(void *argument)
 	uint32_t cc_current = 0;
 	uint8_t sidebuffer_choice = 0;
 	uint16_t i = 0;
+	uint16_t j = 0;
 
 	ENERGY_DATA m_udtEnergyDataCalcs;
 	m_udtEnergyDataCalcs.consumption = 0;
@@ -1486,6 +1485,7 @@ void StartAdcTask(void *argument)
 
 		cc_voltage = 0;
 		cc_current = 0;
+		j = 0;
 
 		m_udtEnergyDataCalcs.pot_ativa = 0;
 		m_udtEnergyDataCalcs.pot_aparente = 0;
@@ -1501,16 +1501,18 @@ void StartAdcTask(void *argument)
 			i = H_BUFFER_SIZE;
 		}
 
-		for(uint16_t c = i; c < H_BUFFER_SIZE; c++){
+		for(uint16_t c = i; c < (H_BUFFER_SIZE + i); c++){
 				// Extrai os 16 bits menos significativos
-				adc1_voltage[c] = (((uint32_t)(adcBuffer[c] & 0x0000FFFF)) * V1_SENSOR_MULT * V1_REAL_MULT);
+				adc1_voltage[j] = (((uint32_t)(adcBuffer[c] & 0x0000FFFF)) * V1_SENSOR_MULT * V1_REAL_MULT);
 
-				cc_voltage += adc1_voltage[c];
+				cc_voltage += adc1_voltage[j];
 
 				// Extrai os 16 bits mais significativos
-				adc2_current[c] = (((uint32_t)((adcBuffer[c] >> 16) & 0x0000FFFF)) * C2_SENSOR_MULT * C2_REAL_MULT);
+				adc2_current[j] = (((uint32_t)((adcBuffer[c] >> 16) & 0x0000FFFF)) * C2_SENSOR_MULT * C2_REAL_MULT);
 
-				cc_current += adc2_current[c];
+				cc_current += adc2_current[j];
+
+				j++;
 		}
 
 		cc_voltage /= H_BUFFER_SIZE;
@@ -1565,14 +1567,17 @@ void StartAdcTask(void *argument)
 			accumulated_active_power = 0;
 			cycle_count = 0;
 		}
-		/*
+
 		pot_ativa1 = m_udtEnergyDataCalcs.pot_ativa;
 		pot_aparente1 = m_udtEnergyDataCalcs.pot_aparente;
 		pot_reativa1 = m_udtEnergyDataCalcs.pot_reativa;
 		rms_voltage1 = m_udtEnergyDataCalcs.rms_voltage;
 		rms_current1 = m_udtEnergyDataCalcs.rms_current;
 		pf1 = m_udtEnergyDataCalcs.pf;
-		consumption1 = m_udtEnergyDataCalcs.consumption;*/
+		consumption1 = m_udtEnergyDataCalcs.consumption;
+
+
+
 
 		if (uxQueueMessagesWaiting(energyqueueHandle) == 1) {
 			xQueueOverwrite(energyqueueHandle, &m_udtEnergyDataCalcs);
