@@ -102,6 +102,8 @@ typedef enum UART_OPCODES
 #define F_BUFFER_SIZE	256
 #define H_BUFFER_SIZE	128
 
+#define MIN_RMS_VOLTAGE 300
+
 
 
 #define STX 0x02
@@ -1518,16 +1520,27 @@ void StartAdcTask(void *argument)
 		cc_voltage /= H_BUFFER_SIZE;
 		cc_current /= H_BUFFER_SIZE;
 
-		for(uint16_t c = i; c < H_BUFFER_SIZE; c++){
+		for(uint16_t c = 0; c < H_BUFFER_SIZE; c++){
 			m_udtEnergyDataCalcs.rms_voltage += (int32_t)((adc1_voltage[c] - cc_voltage) * (adc1_voltage[c] - cc_voltage));
 			m_udtEnergyDataCalcs.rms_current += (int32_t)((adc2_current[c] - cc_current) * (adc2_current[c] - cc_current));
-			m_udtEnergyDataCalcs.pot_ativa += (int32_t)((adc2_current[c] - cc_current) * (adc1_voltage[c] - cc_voltage));
 		}
-
-		m_udtEnergyDataCalcs.pot_ativa = (m_udtEnergyDataCalcs.pot_ativa / H_BUFFER_SIZE)*100;
 
 		m_udtEnergyDataCalcs.rms_voltage = (sqrtf((uint32_t)(m_udtEnergyDataCalcs.rms_voltage/H_BUFFER_SIZE)))*10;
 		m_udtEnergyDataCalcs.rms_current = (sqrtf((uint32_t)(m_udtEnergyDataCalcs.rms_current/H_BUFFER_SIZE)))*100;
+
+		if ((m_udtEnergyDataCalcs.rms_voltage) < MIN_RMS_VOLTAGE)
+		{
+			m_udtEnergyDataCalcs.rms_voltage = 0;
+		}
+
+		if ((m_udtEnergyDataCalcs.rms_current > 0 && m_udtEnergyDataCalcs.rms_voltage > 0))
+		{
+			for(uint16_t c = 0; c < H_BUFFER_SIZE; c++){
+				m_udtEnergyDataCalcs.pot_ativa += (int32_t)((adc2_current[c] - cc_current) * (adc1_voltage[c] - cc_voltage));
+			}
+		}
+
+		m_udtEnergyDataCalcs.pot_ativa = (m_udtEnergyDataCalcs.pot_ativa / H_BUFFER_SIZE)*100;
 
 		if ((m_udtEnergyDataCalcs.rms_voltage * m_udtEnergyDataCalcs.rms_current) > 0)
 	    {
